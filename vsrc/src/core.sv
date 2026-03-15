@@ -103,9 +103,9 @@ module core import common::*;(
 				id_use_imm = 1'b1;
 				unique case (fun3)
 					3'b000: id_alu_op = ALU_ADD; // addi
-					3'b100: id_alu_op = ALU_XOR; // addi
-					3'b110: id_alu_op = ALU_OR; // addi
-					3'b111: id_alu_op = ALU_AND; // addi
+					3'b100: id_alu_op = ALU_XOR; // xori
+					3'b110: id_alu_op = ALU_OR; // ori
+					3'b111: id_alu_op = ALU_AND; // andi
 					default: id_wen = 1'b0;
 				endcase
 			end
@@ -174,18 +174,18 @@ module core import common::*;(
 	always_ff @(posedge clk) begin
 		if (reset) begin
 			ex_wb_valid <= 1'b0;
-			ex_wb_wen <= 1'b0;
-			ex_wb_rd <= '0;
-			ex_wb_data <= '0;
-			ex_wb_pc <= '0;
+			ex_wb_wen   <= 1'b0;
+			ex_wb_rd    <= '0;
+			ex_wb_data  <= '0;
+			ex_wb_pc    <= '0;
 			ex_wb_instr <= '0;
 		end
 		else begin
 			ex_wb_valid <= id_valid;
-			ex_wb_wen <= id_wen;
-			ex_wb_rd <= rd;
-			ex_wb_data <= ex_res;
-			ex_wb_pc <= if_id_pc;
+			ex_wb_wen   <= id_wen;
+			ex_wb_rd    <= rd;
+			ex_wb_data  <= ex_res;
+			ex_wb_pc    <= if_id_pc;
 			ex_wb_instr <= if_id_instr;
 		end
 	end
@@ -227,6 +227,26 @@ module core import common::*;(
 			dt_wen   <= wb_wen && (wb_rd != 5'd0);
 			dt_wdest <= {3'b0, wb_rd};
 			dt_wdata <= wb_data;
+		end
+	end
+
+	logic trap_valid;
+	logic [2:0] trap_code;
+	word_t cyc_cnt, instr_cnt;
+
+	assign trap_valid = dt_valid && (dt_instr == 32'h0005006b);
+	assign trap_code = gpr[10][2:0];
+
+	always_ff @(posedge clk) begin
+		if (reset) begin
+			cyc_cnt <= '0;
+			instr_cnt <= '0;
+		end
+		else begin
+			cyc_cnt <= cyc_cnt + 64'd1;
+			if (dt_valid) begin
+				instr_cnt <= instr_cnt + 64'd1;
+			end
 		end
 	end
 
@@ -287,11 +307,11 @@ module core import common::*;(
     DifftestTrapEvent DifftestTrapEvent(
 		.clock              (clk),
 		.coreid             (0),
-		.valid              (0),
-		.code               (0),
-		.pc                 (0),
-		.cycleCnt           (0),
-		.instrCnt           (0)
+		.valid              (trap_valid),
+		.code               (trap_code),
+		.pc                 (dt_pc),
+		.cycleCnt           (cyc_cnt),
+		.instrCnt           (instr_cnt)
 	);
 
 	DifftestCSRState DifftestCSRState(
