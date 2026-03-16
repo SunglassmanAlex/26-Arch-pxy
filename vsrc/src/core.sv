@@ -13,11 +13,11 @@ module core import common::*;(
 	input  dbus_resp_t dresp,
 	input  logic       trint, swint, exint
 );
-	/* TODO: Add your CPU-Core here. */
 
 	addr_t pc, if_req_addr, if_id_pc;
 	logic  if_pending, if_id_valid;
 	u32    if_id_instr;
+	logic  id_consume;
 	
 	assign ireq.valid = if_pending;
 	assign ireq.addr  = if_req_addr;
@@ -44,7 +44,7 @@ module core import common::*;(
 				pc <= if_req_addr + 64'd4;
 				if_pending <= 1'b0;
 			end
-			if (if_id_valid) begin
+			if (if_id_valid && id_consume) begin
 				if_id_valid <= 1'b0;
 			end
 		end
@@ -80,8 +80,14 @@ module core import common::*;(
 		gpr[0] <= '0;
 	end
 
+	function automatic word_t sext32(input logic [31:0] x);
+		sext32 = {{32{x[31]}}, x};
+	endfunction
+
 	logic id_wen, id_use_imm, id_is_word, id_valid;
+	logic id_is_md;
 	logic [2:0] id_alu_op;
+	logic [3:0] id_md_op;
 	word_t ex_op1, ex_op2, ex_res, ex_res_raw;
 
 	localparam logic [2:0] ALU_ADD = 3'D0;
@@ -90,49 +96,92 @@ module core import common::*;(
 	localparam logic [2:0] ALU_OR = 3'D3;
 	localparam logic [2:0] ALU_XOR = 3'D4;
 
+	// M extension op select
+	localparam logic [3:0] MD_NONE  = 4'd0;
+	localparam logic [3:0] MD_MUL   = 4'd1;
+	localparam logic [3:0] MD_DIV   = 4'd2;
+	localparam logic [3:0] MD_DIVU  = 4'd3;
+	localparam logic [3:0] MD_REM   = 4'd4;
+	localparam logic [3:0] MD_REMU  = 4'd5;
+	localparam logic [3:0] MD_MULW  = 4'd6;
+	localparam logic [3:0] MD_DIVW  = 4'd7;
+	localparam logic [3:0] MD_DIVUW = 4'd8;
+	localparam logic [3:0] MD_REMW  = 4'd9;
+	localparam logic [3:0] MD_REMUW = 4'd10;
+
 	always_comb begin
 		id_valid = if_id_valid;
 		id_wen = 1'b0;
 		id_use_imm = 1'b0;
 		id_is_word = 1'b0;
+		id_is_md = 1'b0;
 		id_alu_op = ALU_ADD;
+		id_md_op = MD_NONE;
 
 		unique case (opc)
-			7'b0010011: begin // addi, xori, ori, andi
+			7'b0010011: begin
 				id_wen = 1'b1;
 				id_use_imm = 1'b1;
 				unique case (fun3)
-					3'b000: id_alu_op = ALU_ADD; // addi
-					3'b100: id_alu_op = ALU_XOR; // xori
-					3'b110: id_alu_op = ALU_OR; // ori
-					3'b111: id_alu_op = ALU_AND; // andi
+					3'b000: id_alu_op = ALU_ADD;
+					3'b100: id_alu_op = ALU_XOR;
+					3'b110: id_alu_op = ALU_OR;
+					3'b111: id_alu_op = ALU_AND;
 					default: id_wen = 1'b0;
 				endcase
 			end
 
-			7'b0110011: begin // add, sub, and, or, xor
-				id_wen = 1;
-				unique case ({fun7, fun3})
-					{7'b0000000,3'b000}: id_alu_op = ALU_ADD; // add
-					{7'b0100000,3'b000}: id_alu_op = ALU_SUB; // sub
-					{7'b0000000,3'b111}: id_alu_op = ALU_AND; // and
-					{7'b0000000,3'b110}: id_alu_op = ALU_OR;  // or
-					{7'b0000000,3'b100}: id_alu_op = ALU_XOR; // xor
-					default: id_wen = 1'b0;
-				endcase
+			7'b0110011: begin
+				if (fun7 == 7'b0000001) begin
+					id_wen = 1'b1;
+					id_is_md = 1'b1;
+					unique case (fun3)
+						3'b000: id_md_op = MD_MUL;
+						3'b100: id_md_op = MD_DIV;
+						3'b101: id_md_op = MD_DIVU;
+						3'b110: id_md_op = MD_REM;
+						3'b111: id_md_op = MD_REMU;
+						default: id_wen = 1'b0;
+					endcase
+				end
+				else begin
+					id_wen = 1'b1;
+						case ({fun7, fun3})
+							{7'b0000000,3'b000}: id_alu_op = ALU_ADD;
+							{7'b0100000,3'b000}: id_alu_op = ALU_SUB;
+							{7'b0000000,3'b111}: id_alu_op = ALU_AND;
+							{7'b0000000,3'b110}: id_alu_op = ALU_OR;
+							{7'b0000000,3'b100}: id_alu_op = ALU_XOR;
+							default: id_wen = 1'b0;
+						endcase
+				end
 			end
 
-			7'b0111011: begin // addw, subw
-				id_wen = 1'b1;
-				id_is_word = 1'b1;
-				unique case ({fun7, fun3})
-					{7'b0000000,3'b000}: id_alu_op = ALU_ADD; // addw
-					{7'b0100000,3'b000}: id_alu_op = ALU_SUB; // subw
-					default: id_wen = 1'b0;
-				endcase
+			7'b0111011: begin
+				if (fun7 == 7'b0000001) begin
+					id_wen = 1'b1;
+					id_is_md = 1'b1;
+					unique case (fun3)
+						3'b000: id_md_op = MD_MULW;
+						3'b100: id_md_op = MD_DIVW;
+						3'b101: id_md_op = MD_DIVUW;
+						3'b110: id_md_op = MD_REMW;
+						3'b111: id_md_op = MD_REMUW;
+						default: id_wen = 1'b0;
+					endcase
+				end
+				else begin
+					id_wen = 1'b1;
+					id_is_word = 1'b1;
+						case ({fun7, fun3})
+							{7'b0000000,3'b000}: id_alu_op = ALU_ADD;
+							{7'b0100000,3'b000}: id_alu_op = ALU_SUB;
+							default: id_wen = 1'b0;
+						endcase
+				end
 			end
 
-			7'b0011011: begin // addiw
+			7'b0011011: begin
 				if (fun3 == 3'b000) begin
 					id_wen = 1'b1;
 					id_use_imm = 1'b1;
@@ -161,8 +210,151 @@ module core import common::*;(
 		endcase
 	end
 
-	assign ex_res = id_is_word ? {{32{ex_res_raw[31]}}, ex_res_raw[31:0]} : ex_res_raw;
-	
+	function automatic word_t mul_u64(input word_t a, input word_t b);
+		word_t acc, mcand, mplier;
+		acc = '0;
+		mcand = a;
+		mplier = b;
+		for (int i = 0; i < 64; i += 1) begin
+			if (mplier[0]) acc = acc + mcand;
+			mcand = mcand << 1;
+			mplier = {1'b0, mplier[63:1]};
+		end
+		mul_u64 = acc;
+	endfunction
+
+	function automatic logic [127:0] udivrem64(input word_t dividend, input word_t divisor);
+		logic [64:0] rem;
+		word_t quot;
+		rem = '0;
+		quot = dividend;
+		for (int i = 0; i < 64; i += 1) begin
+			rem = {rem[63:0], quot[63]};
+			quot = {quot[62:0], 1'b0};
+			if (rem >= {1'b0, divisor}) begin
+				rem = rem - {1'b0, divisor};
+				quot[0] = 1'b1;
+			end
+		end
+		udivrem64 = {rem[63:0], quot};
+	endfunction
+
+	word_t md_res;
+
+	always_comb begin
+		logic a_neg64, b_neg64, a_neg32, b_neg32;
+		word_t a_abs64, b_abs64;
+		logic [31:0] a_abs32, b_abs32;
+		logic [31:0] a32, b32;
+		logic [127:0] divpack;
+		word_t q_u, r_u, mul_raw;
+		logic [31:0] res32;
+
+		a_neg64 = ex_op1[63];
+		b_neg64 = ex_op2[63];
+		a_abs64 = a_neg64 ? (~ex_op1 + 64'd1) : ex_op1;
+		b_abs64 = b_neg64 ? (~ex_op2 + 64'd1) : ex_op2;
+
+		a32 = ex_op1[31:0];
+		b32 = ex_op2[31:0];
+		a_neg32 = a32[31];
+		b_neg32 = b32[31];
+		a_abs32 = a_neg32 ? (~a32 + 32'd1) : a32;
+		b_abs32 = b_neg32 ? (~b32 + 32'd1) : b32;
+
+		md_res = '0;
+		divpack = '0;
+		q_u = '0;
+		r_u = '0;
+		mul_raw = '0;
+		res32 = 32'd0;
+
+		case (id_md_op)
+			MD_MUL: begin
+				mul_raw = mul_u64(a_abs64, b_abs64);
+				md_res = (a_neg64 ^ b_neg64) ? (~mul_raw + 64'd1) : mul_raw;
+			end
+			MD_MULW: begin
+				mul_raw = mul_u64({32'd0, a_abs32}, {32'd0, b_abs32});
+				res32 = mul_raw[31:0];
+				if (a_neg32 ^ b_neg32) res32 = ~res32 + 32'd1;
+				md_res = sext32(res32);
+			end
+			MD_DIV: begin
+				if (ex_op2 == 64'd0) md_res = 64'hffff_ffff_ffff_ffff;
+				else if ((ex_op1 == 64'h8000_0000_0000_0000) && (ex_op2 == 64'hffff_ffff_ffff_ffff)) md_res = 64'h8000_0000_0000_0000;
+				else begin
+					divpack = udivrem64(a_abs64, b_abs64);
+					q_u = divpack[63:0];
+					md_res = (a_neg64 ^ b_neg64) ? (~q_u + 64'd1) : q_u;
+				end
+			end
+			MD_DIVU: begin
+				if (ex_op2 == 64'd0) md_res = 64'hffff_ffff_ffff_ffff;
+				else begin
+					divpack = udivrem64(ex_op1, ex_op2);
+					md_res = divpack[63:0];
+				end
+			end
+			MD_REM: begin
+				if (ex_op2 == 64'd0) md_res = ex_op1;
+				else if ((ex_op1 == 64'h8000_0000_0000_0000) && (ex_op2 == 64'hffff_ffff_ffff_ffff)) md_res = 64'd0;
+				else begin
+					divpack = udivrem64(a_abs64, b_abs64);
+					r_u = divpack[127:64];
+					md_res = a_neg64 ? (~r_u + 64'd1) : r_u;
+				end
+			end
+			MD_REMU: begin
+				if (ex_op2 == 64'd0) md_res = ex_op1;
+				else begin
+					divpack = udivrem64(ex_op1, ex_op2);
+					md_res = divpack[127:64];
+				end
+			end
+			MD_DIVW: begin
+				if (b32 == 32'd0) md_res = 64'hffff_ffff_ffff_ffff;
+				else if ((a32 == 32'h8000_0000) && (b32 == 32'hffff_ffff)) md_res = sext32(32'h8000_0000);
+				else begin
+					divpack = udivrem64({32'd0, a_abs32}, {32'd0, b_abs32});
+					res32 = divpack[31:0];
+					if (a_neg32 ^ b_neg32) res32 = ~res32 + 32'd1;
+					md_res = sext32(res32);
+				end
+			end
+			MD_DIVUW: begin
+				if (b32 == 32'd0) md_res = 64'hffff_ffff_ffff_ffff;
+				else begin
+					divpack = udivrem64({32'd0, a32}, {32'd0, b32});
+					md_res = sext32(divpack[31:0]);
+				end
+			end
+			MD_REMW: begin
+				if (b32 == 32'd0) md_res = sext32(a32);
+				else if ((a32 == 32'h8000_0000) && (b32 == 32'hffff_ffff)) md_res = 64'd0;
+				else begin
+					divpack = udivrem64({32'd0, a_abs32}, {32'd0, b_abs32});
+					res32 = divpack[95:64];
+					if (a_neg32) res32 = ~res32 + 32'd1;
+					md_res = sext32(res32);
+				end
+			end
+			MD_REMUW: begin
+				if (b32 == 32'd0) md_res = sext32(a32);
+				else begin
+					divpack = udivrem64({32'd0, a32}, {32'd0, b32});
+					md_res = sext32(divpack[95:64]);
+				end
+			end
+			default: begin
+				md_res = '0;
+			end
+		endcase
+	end
+
+	assign ex_res = id_is_md ? md_res : (id_is_word ? {{32{ex_res_raw[31]}}, ex_res_raw[31:0]} : ex_res_raw);
+	assign id_consume = id_valid;
+		
 	// EX -> WB
 	logic ex_wb_valid, ex_wb_wen;
 	logic [4:0] ex_wb_rd;
@@ -182,7 +374,7 @@ module core import common::*;(
 		end
 		else begin
 			ex_wb_valid <= id_valid;
-			ex_wb_wen   <= id_wen;
+			ex_wb_wen   <= id_valid ? id_wen : 1'b0;
 			ex_wb_rd    <= rd;
 			ex_wb_data  <= ex_res;
 			ex_wb_pc    <= if_id_pc;
@@ -319,7 +511,7 @@ module core import common::*;(
 		.coreid             (0),
 		.priviledgeMode     (3),
 		.mstatus            (0),
-		.sstatus            (0 /* mstatus & 64'h800000030001e000 */),
+		.sstatus            (0),
 		.mepc               (0),
 		.sepc               (0),
 		.mtval              (0),
