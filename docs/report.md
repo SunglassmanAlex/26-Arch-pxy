@@ -1,277 +1,281 @@
-# 26-Arch Lab1 实验报告
+# 26-Arch Lab2 实验报告
 
 ## 1. 基本信息
 
 - 姓名：潘孝圆
 - 学号：24300240128
 - 课程：26-Arch
-- 实验：Lab1（64 位算术 CPU）
+- 实验：Lab2
 
-## 2. 实验目标与要求
+## 2. 实验目标
 
-本实验要求完成一个支持 64 位整数算术的 CPU 核心，并通过给定 difftest。
+本实验要求在已有 64 位 CPU 的基础上，继续支持内存读写相关指令，并通过 difftest 检查。根据实验要求，本次实现的指令包括：
 
-必做指令：
+- 读内存：`ld`、`lb`、`lh`、`lw`、`lbu`、`lhu`、`lwu`
+- 写内存：`sd`、`sb`、`sh`、`sw`
+- 立即数构造：`lui`
 
-- `addi, xori, ori, andi`
-- `add, sub, and, or, xor`
-- `addiw, addw, subw`
+本次实验的核心不在于单纯增加几条译码，而在于把数据总线 `dreq/dresp` 真正接入 CPU 执行流程，使得 CPU 能够正确发出访存请求、等待返回数据、完成 load 的扩展和 store 的字节写掩码生成，并在 difftest 中正确描述访存行为。
 
-选做指令（本次已完成）：
+## 3. 整体设计思路
 
-- `mul, div, divu, rem, remu`
-- `mulw, divw, divuw, remw, remuw`
+我在 Lab1 的基础上继续保留了当前 CPU 的低并发顺序推进结构，没有把它改造成高并发五级流水。这样做的原因是现有代码已经能够稳定通过 Lab1 与选做乘除指令测试，继续在这个结构上补 Lab2 的访存路径，改动范围更小，也更容易保证正确性。
 
-通过标准：
+这一版 CPU 的整体流程可以概括为：
 
-- `make test-lab1` 出现 `HIT GOOD TRAP`
-- 选做指令 `make test-lab1-extra` 出现 `HIT GOOD TRAP`
+1. 取指阶段一次只保留一条 `if_id` 指令。
+2. 普通算术、逻辑、`lui`、乘除类指令在当前拍完成组合计算，并进入已有的提交路径。
+3. 遇到 `load/store` 时，不直接提交，而是进入一个阻塞式访存阶段。
+4. 在访存完成之前，前端停止继续取新指令。
+5. 访存完成后，再把这条指令送入统一的提交路径，更新寄存器并进行 difftest。
 
-## 3. 总体设计说明
+这样做的本质是把访存指令做成一个多周期操作，但不引入复杂的乱序或旁路逻辑，而是让整颗 CPU 在访存期间暂停前端，从而保证实现简单且行为可控。
 
-## 3.1 数据通路与阶段组织
+## 4. 译码与立即数扩展
 
-当前 `core.sv` 的主路径按“取指-译码/执行-写回”组织，使用了明确的阶段寄存器：
+为了支持 Lab2 的指令，我在原有 `imm_i` 的基础上增加了两个立即数：
 
-- IF 侧：
-  - `pc`
-  - `if_pending`（是否有未完成取指请求）
-  - `if_req_addr`
-- IF/ID 缓冲：
-  - `if_id_valid`
-  - `if_id_pc`
-  - `if_id_instr`
-- EX/WB 缓冲：
-  - `ex_wb_valid`
-  - `ex_wb_wen`
-  - `ex_wb_rd`
-  - `ex_wb_data`
-  - `ex_wb_pc`
-  - `ex_wb_instr`
+- `imm_s`：给 `sb/sh/sw/sd` 使用
+- `imm_u`：给 `lui` 使用
 
-由于本实验不涉及数据存储器读写，`dreq` 固定为 `0`，重点在算术/逻辑执行与正确提交。
+其中：
 
-## 3.2 指令获取与 IF/ID 控制
+- `load` 的地址使用 `rs1 + imm_i`
+- `store` 的地址使用 `rs1 + imm_s`
+- `lui` 的结果直接使用 `imm_u`
 
-取指逻辑要点：
+`lui` 在 RV64 下写入的是 32 位 U 型立即数再符号扩展到 64 位，因此这里直接构造了 64 位的符号扩展结果。
 
-1. 当 `!if_pending && !if_id_valid` 时发起取指请求。
-2. `iresp.data_ok` 到达后，填充 `if_id_pc/if_id_instr` 并置 `if_id_valid=1`。
-3. 当下游声明消耗（`id_consume=1`）时，清除 `if_id_valid`。
+在译码阶段，我新增了以下控制信息：
 
-这样可以保证 IF 与下游解耦，不会重复消费同一条指令。
+- 是否为 `load`
+- 是否为 `store`
+- 是否为 `lui`
+- 访存大小 `MSIZE1/MSIZE2/MSIZE4/MSIZE8`
+- `load` 的类型编号，用于区分 `lb/lh/lw/ld/lbu/lhu/lwu`
 
-## 3.3 译码与执行控制信号
+这样后续阶段就可以根据这些控制信号分别走 ALU 路径或访存路径。
 
-译码输出的关键控制信号：
+## 5. 阻塞式访存状态机
 
-- `id_valid`
-- `id_wen`
-- `id_use_imm`
-- `id_is_word`
-- `id_is_md`（是否 M 扩展）
-- `id_alu_op`（基础 ALU 选择）
-- `id_md_op`（M 扩展子操作码）
+### 5.1 设计原因
 
-基础 ALU 支持 `ADD/SUB/AND/OR/XOR`，操作数来自：
+内存总线不是组合逻辑读写，而是请求-响应式接口。CPU 发出 `dreq` 后，不能假设本拍就拿到结果，必须等待 `dresp.data_ok`。因此对于 `load/store`，我实现了一个阻塞式的访存状态机。
 
-- `ex_op1 = rs1_val`
-- `ex_op2 = id_use_imm ? imm_i : rs2_val`
+### 5.2 状态寄存器
 
-`W` 类指令统一使用 32 位结果再符号扩展回 64 位（`sext32`）。
+我增加了一组专门保存访存上下文的寄存器，例如：
 
-## 3.4 寄存器堆与写回
+- `mem_pending`
+- `mem_is_load`
+- `mem_is_store`
+- `mem_rd`
+- `mem_pc`
+- `mem_instr`
+- `mem_addr`
+- `mem_size`
+- `mem_strobe`
+- `mem_wdata`
+- `mem_load_optype`
 
-- 寄存器堆 `gpr[31:0]` 在写回阶段更新，`x0` 强制保持 0。
-- 写回数据从 `ex_wb_*` 输出到 `wb_*`，再写寄存器并同步给 difftest 提交接口。
+这些寄存器的作用是：当一条 `load/store` 在译码阶段被接受后，把这条指令后面真正访存所需的全部信息都锁存下来，之后即使前面的组合译码信号发生变化，也不会影响这次尚未完成的访存事务。
 
-## 4. 选做指令实现与乘除法自动机原理
+### 5.3 状态机流程
 
-## 4.1 本次代码实现方式
+这个访存状态机实际上只有两个主要状态：
 
-本次实现已完成全部 10 条 M 扩展指令，核心逻辑在：
+1. 空闲状态：`mem_pending = 0`
+2. 等待访存完成状态：`mem_pending = 1`
 
-- `mul_u64`（移位加法）
-- `udivrem64`（恢复除法）
-- `MD_*` 的 `case` 结果生成
+执行流程如下：
 
-并且未使用 `*`、`/`、`%` 运算符。
+1. 当译码到 `load/store` 且当前没有未完成访存时，把地址、大小、写掩码、写数据、目标寄存器号等信息锁存到 `mem_*` 寄存器。
+2. 同时置位 `mem_pending = 1`，表示进入访存等待状态。
+3. 在 `mem_pending = 1` 期间，`dreq.valid` 保持为 1，并持续输出同一笔请求。
+4. 当前端发现 `mem_pending = 1` 时，不再继续取下一条指令。
+5. 当 `dresp.data_ok = 1` 时，说明该次访存完成。
+6. 如果是 `load`，则对返回的 64 位数据进行抽取、扩展，得到最终写回值。
+7. 如果是 `store`，则不写寄存器，只作为一次已完成提交送入 difftest。
+8. 最后清掉 `mem_pending`，CPU 恢复正常取指。
 
-当前代码里，`mul_u64/udivrem64` 使用 `for` 循环在组合逻辑中一次性计算结果，功能上正确，能通过实验测试。
+这种写法的优点是结构清晰，和现有 CPU 的执行方式兼容，缺点是访存期间前端完全停住，性能不高，但对于当前实验目标已经足够。
 
-## 4.2 乘法自动机原理（多周期可综合思路）
+## 6. 数据总线请求生成
 
-实验文档强调的“正确工程实现”是多周期状态机（FSM），其原理如下。
+Lab2 最关键的部分之一，是正确填写 `dreq` 的五个字段：
 
-状态定义（示例）：
+- `valid`
+- `addr`
+- `size`
+- `strobe`
+- `data`
 
-- `MUL_IDLE`：等待乘法指令
-- `MUL_PREP`：装载操作数，处理符号位
-- `MUL_ITER`：逐位迭代
-- `MUL_FIX`：符号修正、`mulw` 截断与扩展
-- `MUL_DONE`：结果写回，释放 busy
+我采用的实现方式是：`dreq` 直接由前面提到的 `mem_*` 寄存器驱动。
 
-关键寄存器：
+### 6.1 读请求
 
-- `mul_mcand`（被乘数移位寄存器）
-- `mul_mplier`（乘数移位寄存器）
-- `mul_acc`（累加器）
-- `mul_cnt`（0~63 迭代计数）
-- `mul_sign`（结果符号）
+对于 `load`：
 
-每拍迭代规则（`MUL_ITER`）：
+- `dreq.valid = 1`
+- `dreq.addr = 目标地址`
+- `dreq.size = 访存大小`
+- `dreq.strobe = 0`
+- `dreq.data = 0`
 
-1. 若 `mul_mplier[0] == 1`，则 `mul_acc += mul_mcand`
-2. `mul_mcand <<= 1`
-3. `mul_mplier >>= 1`
-4. `mul_cnt -= 1`
+读取时关键是 `strobe` 必须为全 0，这样总线才知道这是一笔读请求。
 
-结束条件：
+### 6.2 写请求
 
-- `mul_cnt==0` 后进入 `MUL_FIX/MUL_DONE`
-- 对有符号乘法根据 `mul_sign` 做补码修正
-- `mulw` 取低 32 位并符号扩展到 64 位
+对于 `store`：
 
-这样每拍只经过一小段组合逻辑，时序压力明显小于一次性 64 位乘法大组合网。
+- `dreq.valid = 1`
+- `dreq.addr = 目标地址`
+- `dreq.size = 访存大小`
+- `dreq.strobe = 对应字节掩码`
+- `dreq.data = 左移到对应字节 lane 后的数据`
 
-## 4.3 除法/取余自动机原理（恢复除法）
+实验框架会忽略地址低 3 位并按 8 字节对齐，因此真正决定写入哪个字节的是 `strobe` 和 `data` 的位置。我专门写了两个函数：
 
-同样使用多周期 FSM，状态示例：
+- `make_store_mask`
+- `make_store_data`
 
-- `DIV_IDLE`
-- `DIV_PREP`
-- `DIV_ITER`
-- `DIV_FIX`
-- `DIV_DONE`
+用于根据访问大小和 `addr[2:0]` 生成最终的写掩码与写数据。
 
-关键寄存器：
+例如：
 
-- `div_rem`（余数寄存器，通常 65 位）
-- `div_quot`（商寄存器）
-- `div_divisor`
-- `div_cnt`
-- `div_sign_q`（商符号）
-- `div_sign_r`（余数符号）
+- `sb`：只打开 1 个字节的掩码位
+- `sh`：打开连续 2 个字节
+- `sw`：打开连续 4 个字节
+- `sd`：8 个字节全开
 
-每拍迭代（恢复除法）：
+同时，待写入的数据也根据偏移量做左移，这样数据总是出现在正确的字节位置上。
 
-1. `{div_rem, div_quot}` 左移 1 位
-2. 比较 `div_rem` 与 `div_divisor`
-3. 若 `div_rem >= div_divisor`：
-   - `div_rem -= div_divisor`
-   - `div_quot[0] = 1`
-4. `div_cnt -= 1`
+## 7. Load 数据抽取与符号扩展
 
-边界语义（RISC-V 规范）：
+内存返回的是 64 位数据，但 `lb/lh/lw/lbu/lhu/lwu/ld` 实际只需要其中一部分。因此我实现了 `make_load_data` 函数，按照以下步骤处理：
 
-- 除零：
-  - `div/divu/divw/divuw` 返回全 1
-  - `rem/remu/remw/remuw` 返回被除数
-- 溢出（`INT_MIN / -1`）：
-  - 商返回 `INT_MIN`
-  - 余数返回 0
+1. 根据 `addr[2:0]` 先把返回值右移到目标字节位置。
+2. 根据具体指令类型取出 8 位、16 位、32 位或 64 位。
+3. 根据有符号或无符号决定做符号扩展还是零扩展。
 
-最终在 `DIV_FIX` 按有符号/无符号、64/32 位规则处理符号与扩展。
+具体对应关系如下：
 
-## 4.4 多周期自动机与流水线接口关系
+- `lb`：取 8 位并符号扩展
+- `lh`：取 16 位并符号扩展
+- `lw`：取 32 位并符号扩展
+- `ld`：直接取 64 位
+- `lbu`：取 8 位并零扩展
+- `lhu`：取 16 位并零扩展
+- `lwu`：取 32 位并零扩展
 
-如果按 FSM 落地，通常需要：
+这样即可保证写回寄存器的数据形式符合 RISC-V 语义。
 
-1. `md_busy`：乘除法单元忙信号
-2. `id_stall`：当解码到 M 指令且 `md_busy=1` 时阻塞前级
-3. `ex_valid_hold`：冻结正在等待结果的指令上下文（`rd/pc/instr`）
-4. `md_done`：结果有效时进入 WB 提交
+## 8. 与原提交路径的衔接
 
-即：M 指令在 EX 占用多个周期，其他阶段按策略 stall 或旁路推进。
+为了尽量少改 Lab1 已有的 difftest 提交逻辑，我没有重新设计一整套新的提交结构，而是沿用了原有的 `ex_wb -> wb -> dt` 路径，只是在进入该路径之前区分两类情况：
 
-本实验当前代码是“功能先通过版”，算法与 FSM 一致，但计算在组合里一次完成；后续上板/综合时建议替换为上述多周期 FSM 结构。
+- 普通指令：译码后直接把结果送入 `ex_wb`
+- 访存指令：先等待 `dresp.data_ok`，完成后再把结果或提交信息送入 `ex_wb`
 
-## 5. 数据冒险处理说明
+这样做之后：
 
-当前版本未实现完整的前递网络与显式 stall 状态机，属于基础可运行方案。  
-在给定 lab1/lab1-extra 测试下可通过。
+- 算术逻辑指令的行为和 Lab1 保持一致
+- 访存指令也会在完成时进入统一的提交、写回、Trap 检查与 difftest 流程
 
-若继续完善到更标准流水实现，建议：
+这种设计使得整体代码变化集中在 `core.sv` 内部，而不会破坏已经通过验证的 Lab1 主体逻辑。
 
-- 增加 RAW 检测
-- 加入 `EX->ID` / `WB->ID` 前递选择器
-- 对不可前递场景引入精确 stall
+## 9. Difftest 访存事件接入
 
-## 6. Difftest 与 Trap 对接
+除了原来的 `DifftestInstrCommit`、`DifftestArchIntRegState`、`DifftestTrapEvent` 和 `DifftestCSRState`，本次实验我额外接入了：
 
-已接入以下模块：
+- `DifftestStoreEvent`
+- `DifftestLoadEvent`
 
-- `DifftestInstrCommit`
-- `DifftestArchIntRegState`
-- `DifftestTrapEvent`
-- `DifftestCSRState`
+### 9.1 StoreEvent
 
-Trap 事件处理：
+对于 store，我在提交时把以下信息送给 `DifftestStoreEvent`：
 
-- `trap_valid = dt_valid && (dt_instr == 32'h0005006b)`
-- `trap_code = gpr[10][2:0]`
-- 维护 `cyc_cnt`、`instr_cnt` 并上报
+- 访存地址 `storeAddr`
+- 已经对齐并移位后的写数据 `storeData`
+- 字节写掩码 `storeMask`
 
-这保证了测试结束时 DUT 能与参考模型一致退出。
+这样参考模型就能正确比对这次写内存操作。
 
-## 7. 测试过程与结果
+### 9.2 LoadEvent
 
-## 7.1 必做测试
+对于 load，我在提交时把以下信息送给 `DifftestLoadEvent`：
 
-命令：
+- 物理地址 `paddr`
+- `opType`
+- `fuType = 0x0c`
+
+其中 `opType` 用来区分不同 load 类型，和 difftest 内部的解析保持一致：
+
+- `0`: `lb`
+- `1`: `lh`
+- `2`: `lw`
+- `3`: `ld`
+- `4`: `lbu`
+- `5`: `lhu`
+- `6`: `lwu`
+
+这样 difftest 就能知道该如何理解这条 load 指令的返回值。
+
+## 10. 本地验证情况
+
+当前仓库本地自带的 `ready-to-run` 文件中只有 Lab1 的测试镜像，没有 Lab2 的官方测试镜像。因此本次本地可完成的验证主要包括两类：
+
+### 10.1 语法与编译验证
+
+- `core.sv` 成功通过 Verilator 编译
+- 新增的 `load/store/lui`、`dreq/dresp`、difftest 事件连接均无语法错误
+
+### 10.2 回归验证
+
+为了确认 Lab2 的改动没有破坏已有功能，我执行了以下回归：
+
+1. `CCACHE_DISABLE=1 make test-lab1`
+2. `CCACHE_DISABLE=1 make test-lab1-extra`
+
+两项测试均输出 `HIT GOOD TRAP`，说明：
+
+- 原有 Lab1 基本功能仍然正确
+- 之前完成的乘除扩展仍然正确
+- 本次访存相关改动没有破坏原有提交路径和 Trap 逻辑
+
+另外，我已经在 `Makefile` 中加入了 `test-lab2` 入口。后续只要把上游仓库中的 Lab2 测试镜像同步到 `ready-to-run/lab2/`，即可直接运行：
 
 ```bash
-make test-lab1
+make test-lab2
 ```
 
-结果摘要：
+## 11. 遇到的问题与解决方法
 
-- `Core 0: HIT GOOD TRAP at pc = 0x80010004`
-- `instrCnt = 16385, cycleCnt = 65545`
+### 11.1 不能直接把 load/store 当作普通 ALU 指令处理
 
-## 7.2 选做测试
+最开始容易把访存理解为“地址算出来就结束”，但实际上总线是异步返回的，CPU 必须等待 `dresp.data_ok`。为了解决这个问题，我增加了阻塞式的 `mem_pending` 状态。
 
-命令：
+### 11.2 store 的正确性不只取决于地址
 
-```bash
-make test-lab1-extra
-```
+由于底层内存按 8 字节对齐，直接把原始 `rs2` 数据送给总线是不对的。必须根据地址低 3 位对数据做移位，同时生成正确的字节使能掩码。为此我单独实现了 `make_store_mask` 和 `make_store_data`。
 
-结果摘要：
+### 11.3 load 返回值需要再次加工
 
-- `Core 0: HIT GOOD TRAP at pc = 0x8002001c`
-- `instrCnt = 32775, cycleCnt = 131105`
+总线返回的是整 64 位数据，`lb/lh/lw/lbu/lhu/lwu` 都需要自行切片并扩展。如果不做这一步，就会出现读回值宽度不正确、符号位错误的问题。因此我把这部分逻辑统一收敛到 `make_load_data` 中。
 
-结论：`lab1` 与 `lab1-extra` 均通过。
+## 12. 实验总结
 
-## 8. 调试记录（关键问题）
+通过本次实验，我完成了从纯寄存器运算 CPU 到支持数据访存 CPU 的扩展。相比 Lab1，本次最大的变化不在于多了若干条指令，而在于 CPU 开始真正与数据总线交互，需要处理访存请求、返回时机、字节写掩码和数据扩展等问题。
 
-1. **提交流断裂问题**  
-   decode 默认值曾导致 `id_valid` 被清零，修正为继承 `if_id_valid`，提交恢复连续。
+本次实现采用阻塞式访存阶段，优先保证了结构清晰和功能正确。在当前实验要求下，这种方案实现成本较低，且便于后续继续扩展更多内存相关功能。
 
-2. **Trap 收尾问题**  
-   初期 `DifftestTrapEvent.valid` 未正确触发，导致参考模型先结束而 DUT 继续提交，出现 `this_pc different`。补齐 Trap 触发后解决。
+## 13. AI 使用说明
 
-3. **W 类结果符号扩展问题**  
-   增加 `sext32` 并统一 `W` 类写回路径，修复 `addiw/addw/subw` 及 `mulw/divw/remw` 的高位错误。
+本次实验中，我使用了 OpenAI Codex（GPT-5.3）作为辅助工具，主要用途包括：
 
-## 9. AI 使用说明
+- 根据报错日志辅助定位编译错误和 difftest 失配位置
+- 讲解内存总线、load/store 语义、阻塞式访存状态机等原理
+- 协助整理变量和信号命名，使实现结构更清晰
+- 协助梳理报告结构、润色文字表达
 
-本实验在本人独立编码与调试的基础上，使用了 **OpenAI Codex（GPT-5.3）** 进行辅助，主要包括：
-
-- 日志分析与问题定位建议
-- 边界条件核对（`div/rem` 语义）
-- 变量/信号命名规范化建议（如 `if_/id_/ex_/wb_/dt_` 前缀一致性）
-- 乘除法自动机与流水线相关原理讲解（用于辅助理解与设计取舍）
-- 报告文本整理
-
-核心设计、代码实现、调试验证与最终提交均由本人独立完成，AI 仅作为辅助工具。
-
-## 10. 总结与后续改进
-
-本次 Lab1 已完成全部必做与选做指令并通过测试。  
-后续可继续优化：
-
-1. 将乘除法从组合迭代升级为多周期 FSM（更符合综合与时序目标）
-2. 增加前递与 stall 机制，完善流水线冒险处理
-3. 补充对异常/中断和 CSR 的更完整支持
+本实验的核心设计、代码实现、调试分析和最终整理均由我本人独立完成，AI 仅作为辅助说明、排错与表达整理工具使用。

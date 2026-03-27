@@ -18,12 +18,32 @@ module core import common::*;(
 	logic  if_pending, if_id_valid;
 	u32    if_id_instr;
 	logic  id_consume;
-	
+
+	word_t gpr[31:0];
+	logic [4:0] rs1, rs2, rd;
+	logic [6:0] opc, fun7;
+	logic [2:0] fun3;
+	word_t imm_i, imm_s, imm_u;
+
+	logic  mem_pending, mem_is_load, mem_is_store, mem_wen;
+	logic [4:0] mem_rd;
+	addr_t mem_pc, mem_addr;
+	u32    mem_instr;
+	msize_t mem_size;
+	strobe_t mem_strobe;
+	word_t mem_wdata;
+	logic [7:0] mem_load_optype;
+
 	assign ireq.valid = if_pending;
 	assign ireq.addr  = if_req_addr;
-	assign dreq = '0;
 
-	always_ff @(posedge clk) begin 
+	assign dreq.valid  = mem_pending;
+	assign dreq.addr   = mem_addr;
+	assign dreq.size   = mem_size;
+	assign dreq.strobe = mem_strobe;
+	assign dreq.data   = mem_wdata;
+
+	always_ff @(posedge clk) begin
 		if (reset) begin
 			pc <= PCINIT;
 			if_pending <= 1'b0;
@@ -33,7 +53,7 @@ module core import common::*;(
 			if_id_instr <= '0;
 		end
 		else begin
-			if (!if_pending && !if_id_valid) begin
+			if (!if_pending && !if_id_valid && !mem_pending) begin
 				if_pending <= 1'b1;
 				if_req_addr <= pc;
 			end
@@ -50,12 +70,6 @@ module core import common::*;(
 		end
 	end
 
-	word_t gpr[31:0];
-	logic [4:0] rs1, rs2, rd;
-	logic [6:0] opc, fun7;
-	logic [2:0] fun3;
-	word_t imm_i;
-
 	assign opc   = if_id_instr[6:0];
 	assign rd    = if_id_instr[11:7];
 	assign fun3  = if_id_instr[14:12];
@@ -63,6 +77,8 @@ module core import common::*;(
 	assign rs2   = if_id_instr[24:20];
 	assign fun7  = if_id_instr[31:25];
 	assign imm_i = {{52{if_id_instr[31]}}, if_id_instr[31:20]};
+	assign imm_s = {{52{if_id_instr[31]}}, if_id_instr[31:25], if_id_instr[11:7]};
+	assign imm_u = {{32{if_id_instr[31]}}, if_id_instr[31:12], 12'd0};
 
 	word_t rs1_val, rs2_val;
 	assign rs1_val = (rs1 == 5'd0) ? 64'd0 : gpr[rs1];
@@ -80,23 +96,73 @@ module core import common::*;(
 		gpr[0] <= '0;
 	end
 
+	function automatic word_t sext8(input logic [7:0] x);
+		sext8 = {{56{x[7]}}, x};
+	endfunction
+
+	function automatic word_t sext16(input logic [15:0] x);
+		sext16 = {{48{x[15]}}, x};
+	endfunction
+
 	function automatic word_t sext32(input logic [31:0] x);
 		sext32 = {{32{x[31]}}, x};
 	endfunction
 
+	function automatic strobe_t make_store_mask(input msize_t size, input logic [2:0] ofs);
+		unique case (size)
+			MSIZE1: make_store_mask = 8'b0000_0001 << ofs;
+			MSIZE2: make_store_mask = 8'b0000_0011 << ofs;
+			MSIZE4: make_store_mask = 8'b0000_1111 << ofs;
+			default: make_store_mask = 8'b1111_1111;
+		endcase
+	endfunction
+
+	function automatic word_t make_store_data(input msize_t size, input logic [2:0] ofs, input word_t src);
+		logic [63:0] payload;
+		logic [5:0] shamt;
+		shamt = {ofs, 3'b000};
+		unique case (size)
+			MSIZE1: payload = {56'd0, src[7:0]};
+			MSIZE2: payload = {48'd0, src[15:0]};
+			MSIZE4: payload = {32'd0, src[31:0]};
+			default: payload = src;
+		endcase
+		make_store_data = payload << shamt;
+	endfunction
+
+	function automatic word_t make_load_data(input word_t raw, input logic [2:0] ofs, input logic [7:0] optype);
+		word_t shifted;
+		shifted = raw >> {ofs, 3'b000};
+		unique case (optype)
+			8'd0: make_load_data = sext8(shifted[7:0]);
+			8'd1: make_load_data = sext16(shifted[15:0]);
+			8'd2: make_load_data = sext32(shifted[31:0]);
+			8'd3: make_load_data = shifted;
+			8'd4: make_load_data = {56'd0, shifted[7:0]};
+			8'd5: make_load_data = {48'd0, shifted[15:0]};
+			8'd6: make_load_data = {32'd0, shifted[31:0]};
+			default: make_load_data = 64'd0;
+		endcase
+	endfunction
+
 	logic id_wen, id_use_imm, id_is_word, id_valid;
-	logic id_is_md;
+	logic id_is_md, id_is_lui, id_is_load, id_is_store;
 	logic [2:0] id_alu_op;
 	logic [3:0] id_md_op;
-	word_t ex_op1, ex_op2, ex_res, ex_res_raw;
+	msize_t id_mem_size;
+	logic [7:0] id_load_optype;
+	word_t ex_op1, ex_op2, ex_res, ex_res_raw, md_res;
+	addr_t id_mem_addr;
+	strobe_t id_store_mask;
+	word_t id_store_data;
+	logic id_fire, id_go_mem;
 
-	localparam logic [2:0] ALU_ADD = 3'D0;
-	localparam logic [2:0] ALU_SUB = 3'D1;
-	localparam logic [2:0] ALU_AND = 3'D2;
-	localparam logic [2:0] ALU_OR = 3'D3;
-	localparam logic [2:0] ALU_XOR = 3'D4;
+	localparam logic [2:0] ALU_ADD = 3'd0;
+	localparam logic [2:0] ALU_SUB = 3'd1;
+	localparam logic [2:0] ALU_AND = 3'd2;
+	localparam logic [2:0] ALU_OR  = 3'd3;
+	localparam logic [2:0] ALU_XOR = 3'd4;
 
-	// M extension op select
 	localparam logic [3:0] MD_NONE  = 4'd0;
 	localparam logic [3:0] MD_MUL   = 4'd1;
 	localparam logic [3:0] MD_DIV   = 4'd2;
@@ -115,8 +181,13 @@ module core import common::*;(
 		id_use_imm = 1'b0;
 		id_is_word = 1'b0;
 		id_is_md = 1'b0;
+		id_is_lui = 1'b0;
+		id_is_load = 1'b0;
+		id_is_store = 1'b0;
 		id_alu_op = ALU_ADD;
 		id_md_op = MD_NONE;
+		id_mem_size = MSIZE8;
+		id_load_optype = 8'd0;
 
 		unique case (opc)
 			7'b0010011: begin
@@ -146,14 +217,14 @@ module core import common::*;(
 				end
 				else begin
 					id_wen = 1'b1;
-						case ({fun7, fun3})
-							{7'b0000000,3'b000}: id_alu_op = ALU_ADD;
-							{7'b0100000,3'b000}: id_alu_op = ALU_SUB;
-							{7'b0000000,3'b111}: id_alu_op = ALU_AND;
-							{7'b0000000,3'b110}: id_alu_op = ALU_OR;
-							{7'b0000000,3'b100}: id_alu_op = ALU_XOR;
-							default: id_wen = 1'b0;
-						endcase
+					case ({fun7, fun3})
+						{7'b0000000, 3'b000}: id_alu_op = ALU_ADD;
+						{7'b0100000, 3'b000}: id_alu_op = ALU_SUB;
+						{7'b0000000, 3'b111}: id_alu_op = ALU_AND;
+						{7'b0000000, 3'b110}: id_alu_op = ALU_OR;
+						{7'b0000000, 3'b100}: id_alu_op = ALU_XOR;
+						default: id_wen = 1'b0;
+					endcase
 				end
 			end
 
@@ -173,11 +244,11 @@ module core import common::*;(
 				else begin
 					id_wen = 1'b1;
 					id_is_word = 1'b1;
-						case ({fun7, fun3})
-							{7'b0000000,3'b000}: id_alu_op = ALU_ADD;
-							{7'b0100000,3'b000}: id_alu_op = ALU_SUB;
-							default: id_wen = 1'b0;
-						endcase
+					case ({fun7, fun3})
+						{7'b0000000, 3'b000}: id_alu_op = ALU_ADD;
+						{7'b0100000, 3'b000}: id_alu_op = ALU_SUB;
+						default: id_wen = 1'b0;
+					endcase
 				end
 			end
 
@@ -190,21 +261,51 @@ module core import common::*;(
 				end
 			end
 
-			default: begin
+			7'b0110111: begin
+				id_wen = 1'b1;
+				id_is_lui = 1'b1;
 			end
 
+			7'b0000011: begin
+				id_wen = 1'b1;
+				id_is_load = 1'b1;
+				unique case (fun3)
+					3'b000: begin id_mem_size = MSIZE1; id_load_optype = 8'd0; end
+					3'b001: begin id_mem_size = MSIZE2; id_load_optype = 8'd1; end
+					3'b010: begin id_mem_size = MSIZE4; id_load_optype = 8'd2; end
+					3'b011: begin id_mem_size = MSIZE8; id_load_optype = 8'd3; end
+					3'b100: begin id_mem_size = MSIZE1; id_load_optype = 8'd4; end
+					3'b101: begin id_mem_size = MSIZE2; id_load_optype = 8'd5; end
+					3'b110: begin id_mem_size = MSIZE4; id_load_optype = 8'd6; end
+					default: begin id_wen = 1'b0; id_is_load = 1'b0; end
+				endcase
+			end
+
+			7'b0100011: begin
+				id_is_store = 1'b1;
+				unique case (fun3)
+					3'b000: id_mem_size = MSIZE1;
+					3'b001: id_mem_size = MSIZE2;
+					3'b010: id_mem_size = MSIZE4;
+					3'b011: id_mem_size = MSIZE8;
+					default: id_is_store = 1'b0;
+				endcase
+			end
+
+			default: begin
+				end
 		endcase
 	end
 
 	assign ex_op1 = rs1_val;
 	assign ex_op2 = id_use_imm ? imm_i : rs2_val;
-	
+
 	always_comb begin
 		unique case (id_alu_op)
 			ALU_ADD: ex_res_raw = ex_op1 + ex_op2;
 			ALU_SUB: ex_res_raw = ex_op1 - ex_op2;
 			ALU_AND: ex_res_raw = ex_op1 & ex_op2;
-			ALU_OR: ex_res_raw = ex_op1 | ex_op2;
+			ALU_OR:  ex_res_raw = ex_op1 | ex_op2;
 			ALU_XOR: ex_res_raw = ex_op1 ^ ex_op2;
 			default: ex_res_raw = '0;
 		endcase
@@ -238,8 +339,6 @@ module core import common::*;(
 		end
 		udivrem64 = {rem[63:0], quot};
 	endfunction
-
-	word_t md_res;
 
 	always_comb begin
 		logic a_neg64, b_neg64, a_neg32, b_neg32;
@@ -352,73 +451,164 @@ module core import common::*;(
 		endcase
 	end
 
-	assign ex_res = id_is_md ? md_res : (id_is_word ? {{32{ex_res_raw[31]}}, ex_res_raw[31:0]} : ex_res_raw);
-	assign id_consume = id_valid;
-		
-	// EX -> WB
-	logic ex_wb_valid, ex_wb_wen;
+	assign ex_res = id_is_md ? md_res : (id_is_word ? sext32(ex_res_raw[31:0]) : ex_res_raw);
+	assign id_mem_addr = rs1_val + (id_is_store ? imm_s : imm_i);
+	assign id_store_mask = make_store_mask(id_mem_size, id_mem_addr[2:0]);
+	assign id_store_data = make_store_data(id_mem_size, id_mem_addr[2:0], rs2_val);
+	assign id_fire = id_valid && !mem_pending;
+	assign id_go_mem = id_fire && (id_is_load || id_is_store);
+	assign id_consume = id_fire;
+
+	logic ex_wb_valid, ex_wb_wen, ex_wb_is_load, ex_wb_is_store;
 	logic [4:0] ex_wb_rd;
 	word_t ex_wb_data;
-	addr_t ex_wb_pc;
+	addr_t ex_wb_pc, ex_wb_mem_addr;
 	u32 ex_wb_instr;
+	logic [7:0] ex_wb_load_optype;
+	word_t ex_wb_store_data;
+	strobe_t ex_wb_store_mask;
 
-	// ID/EX -> WB
 	always_ff @(posedge clk) begin
 		if (reset) begin
+			mem_pending <= 1'b0;
+			mem_is_load <= 1'b0;
+			mem_is_store <= 1'b0;
+			mem_wen <= 1'b0;
+			mem_rd <= '0;
+			mem_pc <= '0;
+			mem_instr <= '0;
+			mem_addr <= '0;
+			mem_size <= MSIZE8;
+			mem_strobe <= '0;
+			mem_wdata <= '0;
+			mem_load_optype <= '0;
 			ex_wb_valid <= 1'b0;
-			ex_wb_wen   <= 1'b0;
-			ex_wb_rd    <= '0;
-			ex_wb_data  <= '0;
-			ex_wb_pc    <= '0;
+			ex_wb_wen <= 1'b0;
+			ex_wb_is_load <= 1'b0;
+			ex_wb_is_store <= 1'b0;
+			ex_wb_rd <= '0;
+			ex_wb_data <= '0;
+			ex_wb_pc <= '0;
 			ex_wb_instr <= '0;
+			ex_wb_mem_addr <= '0;
+			ex_wb_load_optype <= '0;
+			ex_wb_store_data <= '0;
+			ex_wb_store_mask <= '0;
 		end
 		else begin
-			ex_wb_valid <= id_valid;
-			ex_wb_wen   <= id_valid ? id_wen : 1'b0;
-			ex_wb_rd    <= rd;
-			ex_wb_data  <= ex_res;
-			ex_wb_pc    <= if_id_pc;
-			ex_wb_instr <= if_id_instr;
+			ex_wb_valid <= 1'b0;
+			ex_wb_wen <= 1'b0;
+			ex_wb_is_load <= 1'b0;
+			ex_wb_is_store <= 1'b0;
+			ex_wb_rd <= '0;
+			ex_wb_data <= '0;
+			ex_wb_pc <= '0;
+			ex_wb_instr <= '0;
+			ex_wb_mem_addr <= '0;
+			ex_wb_load_optype <= '0;
+			ex_wb_store_data <= '0;
+			ex_wb_store_mask <= '0;
+
+			if (mem_pending && dresp.data_ok) begin
+				mem_pending <= 1'b0;
+				mem_is_load <= 1'b0;
+				mem_is_store <= 1'b0;
+				mem_wen <= 1'b0;
+				ex_wb_valid <= 1'b1;
+				ex_wb_wen <= mem_is_load ? mem_wen : 1'b0;
+				ex_wb_is_load <= mem_is_load;
+				ex_wb_is_store <= mem_is_store;
+				ex_wb_rd <= mem_rd;
+				ex_wb_data <= mem_is_load ? make_load_data(dresp.data, mem_addr[2:0], mem_load_optype) : 64'd0;
+				ex_wb_pc <= mem_pc;
+				ex_wb_instr <= mem_instr;
+				ex_wb_mem_addr <= mem_addr;
+				ex_wb_load_optype <= mem_load_optype;
+				ex_wb_store_data <= mem_wdata;
+				ex_wb_store_mask <= mem_strobe;
+			end
+			else if (id_go_mem) begin
+				mem_pending <= 1'b1;
+				mem_is_load <= id_is_load;
+				mem_is_store <= id_is_store;
+				mem_wen <= id_wen;
+				mem_rd <= rd;
+				mem_pc <= if_id_pc;
+				mem_instr <= if_id_instr;
+				mem_addr <= id_mem_addr;
+				mem_size <= id_mem_size;
+				mem_strobe <= id_is_store ? id_store_mask : 8'd0;
+				mem_wdata <= id_is_store ? id_store_data : 64'd0;
+				mem_load_optype <= id_load_optype;
+			end
+			else if (id_fire) begin
+				ex_wb_valid <= 1'b1;
+				ex_wb_wen <= id_wen;
+				ex_wb_rd <= rd;
+				ex_wb_data <= id_is_lui ? imm_u : ex_res;
+				ex_wb_pc <= if_id_pc;
+				ex_wb_instr <= if_id_instr;
+			end
 		end
 	end
 
-	logic wb_valid, wb_wen;
+	logic wb_valid, wb_wen, wb_is_load, wb_is_store;
 	logic [4:0] wb_rd;
 	word_t wb_data;
-	addr_t wb_pc;
+	addr_t wb_pc, wb_mem_addr;
 	u32 wb_instr;
+	logic [7:0] wb_load_optype;
+	word_t wb_store_data;
+	strobe_t wb_store_mask;
 
 	assign wb_valid = ex_wb_valid;
 	assign wb_wen = ex_wb_wen;
+	assign wb_is_load = ex_wb_is_load;
+	assign wb_is_store = ex_wb_is_store;
 	assign wb_rd = ex_wb_rd;
 	assign wb_data = ex_wb_data;
-	assign wb_instr = ex_wb_instr;
 	assign wb_pc = ex_wb_pc;
+	assign wb_instr = ex_wb_instr;
+	assign wb_mem_addr = ex_wb_mem_addr;
+	assign wb_load_optype = ex_wb_load_optype;
+	assign wb_store_data = ex_wb_store_data;
+	assign wb_store_mask = ex_wb_store_mask;
 
-	// next step for difftest
-
-	logic dt_valid, dt_wen;
-	addr_t dt_pc;
+	logic dt_valid, dt_wen, dt_is_load, dt_is_store;
+	addr_t dt_pc, dt_mem_addr;
 	u32 dt_instr;
-	logic [7:0] dt_wdest;
-	word_t dt_wdata;
+	logic [7:0] dt_wdest, dt_load_optype;
+	word_t dt_wdata, dt_store_data;
+	strobe_t dt_store_mask;
 
 	always_ff @(posedge clk) begin
 		if (reset) begin
 			dt_valid <= 1'b0;
-			dt_wen   <= 1'b0;
-			dt_pc    <= '0;
+			dt_wen <= 1'b0;
+			dt_is_load <= 1'b0;
+			dt_is_store <= 1'b0;
+			dt_pc <= '0;
+			dt_mem_addr <= '0;
 			dt_instr <= '0;
 			dt_wdest <= '0;
+			dt_load_optype <= '0;
 			dt_wdata <= '0;
+			dt_store_data <= '0;
+			dt_store_mask <= '0;
 		end
 		else begin
 			dt_valid <= wb_valid;
-			dt_pc    <= wb_pc;
+			dt_pc <= wb_pc;
+			dt_mem_addr <= wb_mem_addr;
 			dt_instr <= wb_instr;
-			dt_wen   <= wb_wen && (wb_rd != 5'd0);
+			dt_wen <= wb_wen && (wb_rd != 5'd0);
+			dt_is_load <= wb_is_load;
+			dt_is_store <= wb_is_store;
 			dt_wdest <= {3'b0, wb_rd};
+			dt_load_optype <= wb_load_optype;
 			dt_wdata <= wb_data;
+			dt_store_data <= wb_store_data;
+			dt_store_mask <= wb_store_mask;
 		end
 	end
 
@@ -441,7 +631,6 @@ module core import common::*;(
 			end
 		end
 	end
-
 
 `ifdef VERILATOR
 	DifftestInstrCommit DifftestInstrCommit(
@@ -496,7 +685,27 @@ module core import common::*;(
 		.gpr_31             (gpr[31])
 	);
 
-    DifftestTrapEvent DifftestTrapEvent(
+	DifftestStoreEvent DifftestStoreEvent(
+		.clock              (clk),
+		.coreid             (0),
+		.index              (0),
+		.valid              (dt_valid && dt_is_store),
+		.storeAddr          (dt_mem_addr),
+		.storeData          (dt_store_data),
+		.storeMask          (dt_store_mask)
+	);
+
+	DifftestLoadEvent DifftestLoadEvent(
+		.clock              (clk),
+		.coreid             (0),
+		.index              (0),
+		.valid              (dt_valid && dt_is_load),
+		.paddr              (dt_mem_addr),
+		.opType             (dt_load_optype),
+		.fuType             (8'h0c)
+	);
+
+	DifftestTrapEvent DifftestTrapEvent(
 		.clock              (clk),
 		.coreid             (0),
 		.valid              (trap_valid),

@@ -5,6 +5,7 @@ no_arguments:
 	@echo "  - init: Initialize submodules"
 	@echo "  - handin: Create a zip file for handin"
 	@echo "  - test-lab1: Run lab1 test"
+	@echo "  - test-lab2: Run lab2 test"
 
 init:
 	git submodule update --init --recursive
@@ -42,6 +43,9 @@ test-lab1: sim
 
 test-lab1-extra: sim
 	TEST=$(TEST) ./build/emu --diff $(NEMU_HOME)/riscv64-nemu-interpreter-so -i ./ready-to-run/lab1/lab1-extra-test.bin $(VOPT) || true
+
+test-lab2: sim
+	TEST=$(TEST) ./build/emu --diff $(NEMU_HOME)/riscv64-nemu-interpreter-so -i ./ready-to-run/lab2/lab2-test.bin $(VOPT) || true
 
 clean:
 	rm -rf build
