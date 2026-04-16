@@ -23,7 +23,7 @@ module core import common::*;(
 	logic [4:0] rs1, rs2, rd;
 	logic [6:0] opc, fun7;
 	logic [2:0] fun3;
-	word_t imm_i, imm_s, imm_u;
+	word_t imm_i, imm_s, imm_u, imm_b, imm_j;
 
 	logic  mem_pending, mem_is_load, mem_is_store, mem_wen;
 	logic [4:0] mem_rd;
@@ -67,6 +67,9 @@ module core import common::*;(
 			if (if_id_valid && id_consume) begin
 				if_id_valid <= 1'b0;
 			end
+			if (if_id_valid && id_consume && id_redirect) begin
+				pc <= id_redirect_target;
+			end
 		end
 	end
 
@@ -79,6 +82,8 @@ module core import common::*;(
 	assign imm_i = {{52{if_id_instr[31]}}, if_id_instr[31:20]};
 	assign imm_s = {{52{if_id_instr[31]}}, if_id_instr[31:25], if_id_instr[11:7]};
 	assign imm_u = {{32{if_id_instr[31]}}, if_id_instr[31:12], 12'd0};
+	assign imm_b = {{51{if_id_instr[31]}}, if_id_instr[31], if_id_instr[7], if_id_instr[30:25], if_id_instr[11:8], 1'b0};
+	assign imm_j = {{43{if_id_instr[31]}}, if_id_instr[31], if_id_instr[19:12], if_id_instr[20], if_id_instr[30:21], 1'b0};
 
 	word_t rs1_val, rs2_val;
 	assign rs1_val = (rs1 == 5'd0) ? 64'd0 : gpr[rs1];
@@ -152,22 +157,38 @@ module core import common::*;(
 	endfunction
 
 	logic id_wen, id_use_imm, id_is_word, id_valid;
-	logic id_is_md, id_is_lui, id_is_load, id_is_store;
-	logic [2:0] id_alu_op;
+	logic id_is_md, id_is_lui, id_is_auipc, id_is_load, id_is_store;
+	logic id_is_branch, id_is_jal, id_is_jalr;
+	logic [3:0] id_alu_op;
+	logic [2:0] id_branch_op;
 	logic [3:0] id_md_op;
 	msize_t id_mem_size;
 	logic [7:0] id_load_optype;
 	word_t ex_op1, ex_op2, ex_res, ex_res_raw, md_res;
+	word_t id_jalr_target_raw;
 	addr_t id_mem_addr;
+	addr_t id_jump_target, id_branch_target, id_redirect_target;
 	strobe_t id_store_mask;
 	word_t id_store_data;
-	logic id_fire, id_go_mem;
+	logic id_fire, id_go_mem, id_branch_taken, id_redirect;
 
-	localparam logic [2:0] ALU_ADD = 3'd0;
-	localparam logic [2:0] ALU_SUB = 3'd1;
-	localparam logic [2:0] ALU_AND = 3'd2;
-	localparam logic [2:0] ALU_OR  = 3'd3;
-	localparam logic [2:0] ALU_XOR = 3'd4;
+	localparam logic [3:0] ALU_ADD  = 4'd0;
+	localparam logic [3:0] ALU_SUB  = 4'd1;
+	localparam logic [3:0] ALU_AND  = 4'd2;
+	localparam logic [3:0] ALU_OR   = 4'd3;
+	localparam logic [3:0] ALU_XOR  = 4'd4;
+	localparam logic [3:0] ALU_SLL  = 4'd5;
+	localparam logic [3:0] ALU_SRL  = 4'd6;
+	localparam logic [3:0] ALU_SRA  = 4'd7;
+	localparam logic [3:0] ALU_SLT  = 4'd8;
+	localparam logic [3:0] ALU_SLTU = 4'd9;
+
+	localparam logic [2:0] BR_EQ  = 3'd0;
+	localparam logic [2:0] BR_NE  = 3'd1;
+	localparam logic [2:0] BR_LT  = 3'd2;
+	localparam logic [2:0] BR_GE  = 3'd3;
+	localparam logic [2:0] BR_LTU = 3'd4;
+	localparam logic [2:0] BR_GEU = 3'd5;
 
 	localparam logic [3:0] MD_NONE  = 4'd0;
 	localparam logic [3:0] MD_MUL   = 4'd1;
@@ -188,9 +209,14 @@ module core import common::*;(
 		id_is_word = 1'b0;
 		id_is_md = 1'b0;
 		id_is_lui = 1'b0;
+		id_is_auipc = 1'b0;
 		id_is_load = 1'b0;
 		id_is_store = 1'b0;
+		id_is_branch = 1'b0;
+		id_is_jal = 1'b0;
+		id_is_jalr = 1'b0;
 		id_alu_op = ALU_ADD;
+		id_branch_op = BR_EQ;
 		id_md_op = MD_NONE;
 		id_mem_size = MSIZE8;
 		id_load_optype = 8'd0;
@@ -201,7 +227,18 @@ module core import common::*;(
 				id_use_imm = 1'b1;
 				unique case (fun3)
 					3'b000: id_alu_op = ALU_ADD;
+					3'b001: begin
+						if (if_id_instr[31:26] == 6'b000000) id_alu_op = ALU_SLL;
+						else id_wen = 1'b0;
+					end
+					3'b010: id_alu_op = ALU_SLT;
+					3'b011: id_alu_op = ALU_SLTU;
 					3'b100: id_alu_op = ALU_XOR;
+					3'b101: begin
+						if (if_id_instr[31:26] == 6'b000000) id_alu_op = ALU_SRL;
+						else if (if_id_instr[31:26] == 6'b010000) id_alu_op = ALU_SRA;
+						else id_wen = 1'b0;
+					end
 					3'b110: id_alu_op = ALU_OR;
 					3'b111: id_alu_op = ALU_AND;
 					default: id_wen = 1'b0;
@@ -226,9 +263,14 @@ module core import common::*;(
 					case ({fun7, fun3})
 						{7'b0000000, 3'b000}: id_alu_op = ALU_ADD;
 						{7'b0100000, 3'b000}: id_alu_op = ALU_SUB;
+						{7'b0000000, 3'b001}: id_alu_op = ALU_SLL;
+						{7'b0000000, 3'b010}: id_alu_op = ALU_SLT;
+						{7'b0000000, 3'b011}: id_alu_op = ALU_SLTU;
 						{7'b0000000, 3'b111}: id_alu_op = ALU_AND;
 						{7'b0000000, 3'b110}: id_alu_op = ALU_OR;
 						{7'b0000000, 3'b100}: id_alu_op = ALU_XOR;
+						{7'b0000000, 3'b101}: id_alu_op = ALU_SRL;
+						{7'b0100000, 3'b101}: id_alu_op = ALU_SRA;
 						default: id_wen = 1'b0;
 					endcase
 				end
@@ -253,23 +295,66 @@ module core import common::*;(
 					case ({fun7, fun3})
 						{7'b0000000, 3'b000}: id_alu_op = ALU_ADD;
 						{7'b0100000, 3'b000}: id_alu_op = ALU_SUB;
+						{7'b0000000, 3'b001}: id_alu_op = ALU_SLL;
+						{7'b0000000, 3'b101}: id_alu_op = ALU_SRL;
+						{7'b0100000, 3'b101}: id_alu_op = ALU_SRA;
 						default: id_wen = 1'b0;
 					endcase
 				end
 			end
 
 			7'b0011011: begin
-				if (fun3 == 3'b000) begin
-					id_wen = 1'b1;
-					id_use_imm = 1'b1;
-					id_is_word = 1'b1;
-					id_alu_op = ALU_ADD;
-				end
+				id_wen = 1'b1;
+				id_use_imm = 1'b1;
+				id_is_word = 1'b1;
+				unique case (fun3)
+					3'b000: id_alu_op = ALU_ADD;
+					3'b001: begin
+						if (fun7 == 7'b0000000) id_alu_op = ALU_SLL;
+						else id_wen = 1'b0;
+					end
+					3'b101: begin
+						if (fun7 == 7'b0000000) id_alu_op = ALU_SRL;
+						else if (fun7 == 7'b0100000) id_alu_op = ALU_SRA;
+						else id_wen = 1'b0;
+					end
+					default: id_wen = 1'b0;
+				endcase
 			end
 
 			7'b0110111: begin
 				id_wen = 1'b1;
 				id_is_lui = 1'b1;
+			end
+
+			7'b0010111: begin
+				id_wen = 1'b1;
+				id_is_auipc = 1'b1;
+			end
+
+			7'b1100011: begin
+				id_is_branch = 1'b1;
+				unique case (fun3)
+					3'b000: id_branch_op = BR_EQ;
+					3'b001: id_branch_op = BR_NE;
+					3'b100: id_branch_op = BR_LT;
+					3'b101: id_branch_op = BR_GE;
+					3'b110: id_branch_op = BR_LTU;
+					3'b111: id_branch_op = BR_GEU;
+					default: id_is_branch = 1'b0;
+				endcase
+			end
+
+			7'b1101111: begin
+				id_wen = 1'b1;
+				id_is_jal = 1'b1;
+			end
+
+			7'b1100111: begin
+				if (fun3 == 3'b000) begin
+					id_wen = 1'b1;
+					id_is_jalr = 1'b1;
+				end
 			end
 
 			7'b0000011: begin
@@ -307,14 +392,42 @@ module core import common::*;(
 	assign ex_op2 = id_use_imm ? imm_i : rs2_val;
 
 	always_comb begin
-		unique case (id_alu_op)
-			ALU_ADD: ex_res_raw = ex_op1 + ex_op2;
-			ALU_SUB: ex_res_raw = ex_op1 - ex_op2;
-			ALU_AND: ex_res_raw = ex_op1 & ex_op2;
-			ALU_OR:  ex_res_raw = ex_op1 | ex_op2;
-			ALU_XOR: ex_res_raw = ex_op1 ^ ex_op2;
-			default: ex_res_raw = '0;
-		endcase
+		logic [31:0] a32, b32, res32;
+		a32 = ex_op1[31:0];
+		b32 = ex_op2[31:0];
+		res32 = 32'd0;
+
+		if (id_is_word) begin
+			unique case (id_alu_op)
+				ALU_ADD:  res32 = a32 + b32;
+				ALU_SUB:  res32 = a32 - b32;
+				ALU_AND:  res32 = a32 & b32;
+				ALU_OR:   res32 = a32 | b32;
+				ALU_XOR:  res32 = a32 ^ b32;
+				ALU_SLL:  res32 = a32 << ex_op2[4:0];
+				ALU_SRL:  res32 = a32 >> ex_op2[4:0];
+				ALU_SRA:  res32 = $signed(a32) >>> ex_op2[4:0];
+				ALU_SLT:  res32 = {31'd0, ($signed(a32) < $signed(b32))};
+				ALU_SLTU: res32 = {31'd0, (a32 < b32)};
+				default:  res32 = 32'd0;
+			endcase
+			ex_res_raw = {32'd0, res32};
+		end
+		else begin
+			unique case (id_alu_op)
+				ALU_ADD:  ex_res_raw = ex_op1 + ex_op2;
+				ALU_SUB:  ex_res_raw = ex_op1 - ex_op2;
+				ALU_AND:  ex_res_raw = ex_op1 & ex_op2;
+				ALU_OR:   ex_res_raw = ex_op1 | ex_op2;
+				ALU_XOR:  ex_res_raw = ex_op1 ^ ex_op2;
+				ALU_SLL:  ex_res_raw = ex_op1 << ex_op2[5:0];
+				ALU_SRL:  ex_res_raw = ex_op1 >> ex_op2[5:0];
+				ALU_SRA:  ex_res_raw = $signed(ex_op1) >>> ex_op2[5:0];
+				ALU_SLT:  ex_res_raw = {63'd0, ($signed(ex_op1) < $signed(ex_op2))};
+				ALU_SLTU: ex_res_raw = {63'd0, (ex_op1 < ex_op2)};
+				default:  ex_res_raw = '0;
+			endcase
+		end
 	end
 
 	function automatic word_t mul_u64(input word_t a, input word_t b);
@@ -458,6 +571,22 @@ module core import common::*;(
 	end
 
 	assign ex_res = id_is_md ? md_res : (id_is_word ? sext32(ex_res_raw[31:0]) : ex_res_raw);
+	always_comb begin
+		unique case (id_branch_op)
+			BR_EQ:  id_branch_taken = (rs1_val == rs2_val);
+			BR_NE:  id_branch_taken = (rs1_val != rs2_val);
+			BR_LT:  id_branch_taken = ($signed(rs1_val) < $signed(rs2_val));
+			BR_GE:  id_branch_taken = ($signed(rs1_val) >= $signed(rs2_val));
+			BR_LTU: id_branch_taken = (rs1_val < rs2_val);
+			BR_GEU: id_branch_taken = (rs1_val >= rs2_val);
+			default: id_branch_taken = 1'b0;
+		endcase
+	end
+	assign id_branch_target = if_id_pc + imm_b;
+	assign id_jalr_target_raw = rs1_val + imm_i;
+	assign id_jump_target = id_is_jalr ? {id_jalr_target_raw[63:1], 1'b0} : (if_id_pc + imm_j);
+	assign id_redirect = (id_is_jal || id_is_jalr) || (id_is_branch && id_branch_taken);
+	assign id_redirect_target = id_is_branch ? id_branch_target : id_jump_target;
 	assign id_mem_addr = rs1_val + (id_is_store ? imm_s : imm_i);
 	assign id_store_mask = make_store_mask(id_mem_size, id_mem_addr[2:0]);
 	assign id_store_data = make_store_data(id_mem_size, id_mem_addr[2:0], rs2_val);
@@ -551,7 +680,10 @@ module core import common::*;(
 				ex_wb_valid <= 1'b1;
 				ex_wb_wen <= id_wen;
 				ex_wb_rd <= rd;
-				ex_wb_data <= id_is_lui ? imm_u : ex_res;
+				if (id_is_lui) ex_wb_data <= imm_u;
+				else if (id_is_auipc) ex_wb_data <= if_id_pc + imm_u;
+				else if (id_is_jal || id_is_jalr) ex_wb_data <= if_id_pc + 64'd4;
+				else ex_wb_data <= ex_res;
 				ex_wb_pc <= if_id_pc;
 				ex_wb_instr <= if_id_instr;
 			end
@@ -591,6 +723,7 @@ module core import common::*;(
 	addr_t store_ev_addr;
 	word_t store_ev_data;
 	strobe_t store_ev_mask;
+	logic dt_skip;
 
 	always_ff @(posedge clk) begin
 		if (reset) begin
@@ -624,7 +757,7 @@ module core import common::*;(
 			dt_wdata <= wb_data;
 			dt_store_data <= wb_store_data;
 			dt_store_mask <= wb_store_mask;
-			store_ev_valid <= dt_valid && dt_is_store;
+			store_ev_valid <= dt_valid && dt_is_store && !dt_skip;
 			store_ev_addr <= dt_store_addr;
 			store_ev_data <= dt_store_data;
 			store_ev_mask <= dt_store_mask;
@@ -652,6 +785,7 @@ module core import common::*;(
 	end
 
 	assign dt_store_addr = {dt_mem_addr[63:3], 3'b000};
+	assign dt_skip = (dt_is_load || dt_is_store) && (dt_mem_addr[31] == 1'b0);
 
 `ifdef VERILATOR
 	DifftestInstrCommit DifftestInstrCommit(
@@ -661,7 +795,7 @@ module core import common::*;(
 		.valid              (dt_valid),
 		.pc                 (dt_pc),
 		.instr              (dt_instr),
-		.skip               (0),
+		.skip               (dt_skip),
 		.isRVC              (0),
 		.scFailed           (0),
 		.wen                (dt_wen),
@@ -720,7 +854,7 @@ module core import common::*;(
 		.clock              (clk),
 		.coreid             (0),
 		.index              (0),
-		.valid              (dt_valid && dt_is_load),
+		.valid              (dt_valid && dt_is_load && !dt_skip),
 		.paddr              (dt_mem_addr),
 		.opType             (dt_load_optype),
 		.fuType             (8'h0c)
