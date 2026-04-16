@@ -132,15 +132,21 @@ module core import common::*;(
 
 	function automatic word_t make_load_data(input word_t raw, input logic [2:0] ofs, input logic [7:0] optype);
 		word_t shifted;
+		logic [7:0] b;
+		logic [15:0] h;
+		logic [31:0] w;
 		shifted = raw >> {ofs, 3'b000};
+		b = shifted[7:0];
+		h = shifted[15:0];
+		w = shifted[31:0];
 		unique case (optype)
-			8'd0: make_load_data = sext8(shifted[7:0]);
-			8'd1: make_load_data = sext16(shifted[15:0]);
-			8'd2: make_load_data = sext32(shifted[31:0]);
+			8'd0: make_load_data = {{56{b[7]}}, b};
+			8'd1: make_load_data = {{48{h[15]}}, h};
+			8'd2: make_load_data = {{32{w[31]}}, w};
 			8'd3: make_load_data = shifted;
-			8'd4: make_load_data = {56'd0, shifted[7:0]};
-			8'd5: make_load_data = {48'd0, shifted[15:0]};
-			8'd6: make_load_data = {32'd0, shifted[31:0]};
+			8'd4: make_load_data = {56'd0, b};
+			8'd5: make_load_data = {48'd0, h};
+			8'd6: make_load_data = {32'd0, w};
 			default: make_load_data = 64'd0;
 		endcase
 	endfunction
@@ -580,6 +586,11 @@ module core import common::*;(
 	logic [7:0] dt_wdest, dt_load_optype;
 	word_t dt_wdata, dt_store_data;
 	strobe_t dt_store_mask;
+	addr_t dt_store_addr;
+	logic store_ev_valid;
+	addr_t store_ev_addr;
+	word_t store_ev_data;
+	strobe_t store_ev_mask;
 
 	always_ff @(posedge clk) begin
 		if (reset) begin
@@ -595,6 +606,10 @@ module core import common::*;(
 			dt_wdata <= '0;
 			dt_store_data <= '0;
 			dt_store_mask <= '0;
+			store_ev_valid <= 1'b0;
+			store_ev_addr <= '0;
+			store_ev_data <= '0;
+			store_ev_mask <= '0;
 		end
 		else begin
 			dt_valid <= wb_valid;
@@ -609,6 +624,10 @@ module core import common::*;(
 			dt_wdata <= wb_data;
 			dt_store_data <= wb_store_data;
 			dt_store_mask <= wb_store_mask;
+			store_ev_valid <= dt_valid && dt_is_store;
+			store_ev_addr <= dt_store_addr;
+			store_ev_data <= dt_store_data;
+			store_ev_mask <= dt_store_mask;
 		end
 	end
 
@@ -631,6 +650,8 @@ module core import common::*;(
 			end
 		end
 	end
+
+	assign dt_store_addr = {dt_mem_addr[63:3], 3'b000};
 
 `ifdef VERILATOR
 	DifftestInstrCommit DifftestInstrCommit(
@@ -689,10 +710,10 @@ module core import common::*;(
 		.clock              (clk),
 		.coreid             (0),
 		.index              (0),
-		.valid              (dt_valid && dt_is_store),
-		.storeAddr          (dt_mem_addr),
-		.storeData          (dt_store_data),
-		.storeMask          (dt_store_mask)
+		.valid              (store_ev_valid),
+		.storeAddr          (store_ev_addr),
+		.storeData          (store_ev_data),
+		.storeMask          (store_ev_mask)
 	);
 
 	DifftestLoadEvent DifftestLoadEvent(
