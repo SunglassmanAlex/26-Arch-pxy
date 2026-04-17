@@ -439,6 +439,7 @@ module core import common::*;(
 		end
 	end
 
+`ifdef VERILATOR
 	function automatic word_t mul_u64(input word_t a, input word_t b);
 		word_t acc, mcand, mplier;
 		acc = '0;
@@ -578,6 +579,11 @@ module core import common::*;(
 			end
 		endcase
 	end
+`else
+	always_comb begin
+		md_res = '0;
+	end
+`endif
 
 	assign ex_res = id_is_md ? md_res : (id_is_word ? sext32(ex_res_raw[31:0]) : ex_res_raw);
 	always_comb begin
