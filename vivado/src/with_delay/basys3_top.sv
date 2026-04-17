@@ -1,4 +1,4 @@
-module basys3_top (
+module nexys4_top (
 	input logic clk, btnC,
 	input logic [3:0] sw,
 	output logic [3:0] led,
@@ -10,5 +10,22 @@ module basys3_top (
 		.sw(sw),
 		.led(led),
 		.tx(RsTx)
+	);
+endmodule
+
+// Backward-compatible wrapper so old project files that still use `basys3_top`
+// can continue to build.
+module basys3_top (
+	input logic clk, btnC,
+	input logic [3:0] sw,
+	output logic [3:0] led,
+	output logic RsTx
+);
+	nexys4_top u_nexys4_top(
+		.clk(clk),
+		.btnC(btnC),
+		.sw(sw),
+		.led(led),
+		.RsTx(RsTx)
 	);
 endmodule
