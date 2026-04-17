@@ -1,3 +1,94 @@
+`ifndef __ARCH_VIVADO_CPU_DEPS_SV
+`define __ARCH_VIVADO_CPU_DEPS_SV
+`include "../../../vsrc/include/config.sv"
+`include "../../../vsrc/include/common.sv"
+`include "../../../vsrc/src/core.sv"
+`include "../../../vsrc/util/IBusToCBus.sv"
+`include "../../../vsrc/util/DBusToCBus.sv"
+`include "../../../vsrc/util/CBusArbiter.sv"
+`endif
+
+module mycpu_top_single
+	import common::*;
+(
+	input logic clk,
+	input logic reset,
+
+	output logic valid,
+	output logic [63:0] addr,
+	output logic [63:0] wdata,
+	input logic [63:0] rdata,
+	output logic [7:0] wstrobe,
+	output logic [1:0] burst,
+	output logic [7:0] len,
+	output logic [2:0] size,
+
+	input logic ready,
+	input logic last
+);
+	cbus_req_t  oreq;
+	cbus_resp_t oresp;
+	logic trint, swint, exint;
+
+	ibus_req_t  ireq;
+	ibus_resp_t iresp;
+	dbus_req_t  dreq;
+	dbus_resp_t dresp;
+	cbus_req_t  icreq, dcreq;
+	cbus_resp_t icresp, dcresp;
+
+	assign trint = 1'b0;
+	assign swint = 1'b0;
+	assign exint = 1'b0;
+
+	core core_inst(
+		.clk(clk),
+		.reset(reset),
+		.ireq(ireq),
+		.iresp(iresp),
+		.dreq(dreq),
+		.dresp(dresp),
+		.trint(trint),
+		.swint(swint),
+		.exint(exint)
+	);
+
+	IBusToCBus icvt(
+		.ireq(ireq),
+		.iresp(iresp),
+		.oreq(icreq),
+		.oresp(icresp)
+	);
+
+	DBusToCBus dcvt(
+		.dreq(dreq),
+		.dresp(dresp),
+		.oreq(dcreq),
+		.oresp(dcresp)
+	);
+
+	CBusArbiter mux(
+		.clk(clk),
+		.reset(reset),
+		.ireqs({icreq, dcreq}),
+		.iresps({icresp, dcresp}),
+		.oreq(oreq),
+		.oresp(oresp)
+	);
+
+	assign valid = oreq.valid;
+	assign addr = oreq.addr;
+	assign wdata = oreq.data;
+	assign wstrobe = oreq.strobe;
+	assign burst = oreq.burst;
+	assign len = oreq.len;
+	assign size = oreq.size;
+
+	assign oresp.data = rdata;
+	assign oresp.ready = ready;
+	assign oresp.last = last;
+endmodule
+
 module soc_top #(
 	parameter logic SIMULATION = 1'b0
 )(
@@ -40,7 +131,20 @@ module soc_top #(
 	logic clk_wiz_locked;
 
 	/* mycpu */
-	mycpu_top mycpu_top_inst(.clk(cpu_clk), .*);
+	mycpu_top_single mycpu_top_inst(
+		.clk(cpu_clk),
+		.reset(reset),
+		.valid(valid),
+		.addr(addr),
+		.wdata(wdata),
+		.rdata(rdata),
+		.wstrobe(wstrobe),
+		.burst(burst),
+		.len(len),
+		.size(size),
+		.ready(ready),
+		.last(last)
+	);
 
 
 	/* CBus Crossbar */
