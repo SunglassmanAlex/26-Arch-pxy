@@ -16,6 +16,7 @@ module bram_wrapper #(
 
 );
 	localparam BRAM_DELAY = SIMULATION ? 2 : 32;
+	localparam int BRAM_ADDR_W = 15;
 	logic [15:0] counter;
 
 	logic real_valid;
@@ -29,12 +30,12 @@ module bram_wrapper #(
 		else real_valid <= '1;
 	end
 
-	wire [17:0] base_addr = addr[20:3];
-	logic [17:0] burst_addr;
+	wire [BRAM_ADDR_W-1:0] base_addr = addr[BRAM_ADDR_W+2:3];
+	logic [BRAM_ADDR_W-1:0] burst_addr;
 
 	wire is_incr = burst == 2'b1;
 	
-	logic [17:0] burst_counter;
+	logic [BRAM_ADDR_W-1:0] burst_counter;
 	always_ff @(posedge clk) begin
 		if (real_valid && is_incr && ~reset) begin
 			burst_counter <= burst_counter + 1;
