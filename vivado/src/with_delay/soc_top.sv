@@ -37,6 +37,7 @@ module soc_top #(
 	logic device_last;
 
 	logic cpu_clk;
+	logic clk_wiz_locked;
 
 	/* mycpu */
 	mycpu_top mycpu_top_inst(.clk(cpu_clk), .*);
@@ -74,7 +75,12 @@ module soc_top #(
 	if (SIMULATION)
 		assign cpu_clk = clk;
 	else
-		clk_wiz_0 clk_wiz_0(.sys_clk(clk), .cpu_clk(cpu_clk));
+		clk_wiz_0 clk_wiz_0(
+			.sys_clk(clk),
+			.reset(reset),
+			.cpu_clk(cpu_clk),
+			.locked(clk_wiz_locked)
+		);
 	
 
 endmodule

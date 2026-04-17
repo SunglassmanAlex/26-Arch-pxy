@@ -18,6 +18,8 @@ module core import common::*;(
 	logic  if_pending, if_id_valid;
 	u32    if_id_instr;
 	logic  id_consume;
+	logic  id_redirect;
+	addr_t id_redirect_target;
 
 	word_t gpr[31:0];
 	logic [4:0] rs1, rs2, rd;
@@ -167,10 +169,10 @@ module core import common::*;(
 	word_t ex_op1, ex_op2, ex_res, ex_res_raw, md_res;
 	word_t id_jalr_target_raw;
 	addr_t id_mem_addr;
-	addr_t id_jump_target, id_branch_target, id_redirect_target;
+	addr_t id_jump_target, id_branch_target;
 	strobe_t id_store_mask;
 	word_t id_store_data;
-	logic id_fire, id_go_mem, id_branch_taken, id_redirect;
+	logic id_fire, id_go_mem, id_branch_taken;
 
 	localparam logic [3:0] ALU_ADD  = 4'd0;
 	localparam logic [3:0] ALU_SUB  = 4'd1;
@@ -201,6 +203,13 @@ module core import common::*;(
 	localparam logic [3:0] MD_DIVUW = 4'd8;
 	localparam logic [3:0] MD_REMW  = 4'd9;
 	localparam logic [3:0] MD_REMUW = 4'd10;
+
+`ifdef VERILATOR
+	localparam logic ENABLE_M_EXT = 1'b1;
+`else
+	// Keep FPGA implementation lightweight for Lab3 board run.
+	localparam logic ENABLE_M_EXT = 1'b0;
+`endif
 
 	always_comb begin
 		id_valid = if_id_valid;
@@ -246,7 +255,7 @@ module core import common::*;(
 			end
 
 			7'b0110011: begin
-				if (fun7 == 7'b0000001) begin
+				if (ENABLE_M_EXT && fun7 == 7'b0000001) begin
 					id_wen = 1'b1;
 					id_is_md = 1'b1;
 					unique case (fun3)
@@ -277,7 +286,7 @@ module core import common::*;(
 			end
 
 			7'b0111011: begin
-				if (fun7 == 7'b0000001) begin
+				if (ENABLE_M_EXT && fun7 == 7'b0000001) begin
 					id_wen = 1'b1;
 					id_is_md = 1'b1;
 					unique case (fun3)
