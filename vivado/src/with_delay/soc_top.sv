@@ -56,15 +56,15 @@ module mycpu_top_single
 	IBusToCBus icvt(
 		.ireq(ireq),
 		.iresp(iresp),
-		.oreq(icreq),
-		.oresp(icresp)
+		.icreq(icreq),
+		.icresp(icresp)
 	);
 
 	DBusToCBus dcvt(
 		.dreq(dreq),
 		.dresp(dresp),
-		.oreq(dcreq),
-		.oresp(dcresp)
+		.dcreq(dcreq),
+		.dcresp(dcresp)
 	);
 
 	CBusArbiter mux(
