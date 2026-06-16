@@ -33,11 +33,11 @@ package csr_pkg;
   parameter u12 CSR_SIP = 12'h144;
 
   parameter u64 MSTATUS_MASK = 64'h7e79bb;
-  parameter u64 SSTATUS_MASK = 64'h800000030001e000;
+  parameter u64 SSTATUS_MASK = 64'h80000003000de122;
   parameter u64 MIP_MASK = 64'hbbb;
   parameter u64 MTVEC_MASK = ~(64'h2);
-  parameter u64 MEDELEG_MASK = 64'h0;
-  parameter u64 MIDELEG_MASK = 64'h0;
+  parameter u64 MEDELEG_MASK = 64'hb1ff;
+  parameter u64 MIDELEG_MASK = 64'h222;
 
   typedef struct packed {
     u1 sd;

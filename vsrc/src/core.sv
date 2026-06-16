@@ -18,14 +18,21 @@ module core import common::*;(
 	import csr_pkg::*;
 
 	localparam logic [1:0] PRIV_U = 2'b00;
+	localparam logic [1:0] PRIV_S = 2'b01;
 	localparam logic [1:0] PRIV_M = 2'b11;
+	localparam word_t MSTATUS_SIE_BIT  = 64'h0000_0000_0000_0002;
 	localparam word_t MSTATUS_MIE_BIT  = 64'h0000_0000_0000_0008;
+	localparam word_t MSTATUS_SPIE_BIT = 64'h0000_0000_0000_0020;
 	localparam word_t MSTATUS_MPIE_BIT = 64'h0000_0000_0000_0080;
+	localparam word_t MSTATUS_SPP_BIT  = 64'h0000_0000_0000_0100;
 	localparam word_t MSTATUS_MPP_MASK = 64'h0000_0000_0000_1800;
 	localparam word_t MSTATUS_XS_MASK  = 64'h0000_0000_0001_8000;
 	localparam word_t MSTATUS_MPRV_BIT = 64'h0000_0000_0002_0000;
+	localparam word_t MIP_SSIP_BIT     = 64'h0000_0000_0000_0002;
 	localparam word_t MIP_MSIP_BIT     = 64'h0000_0000_0000_0008;
+	localparam word_t MIP_STIP_BIT     = 64'h0000_0000_0000_0020;
 	localparam word_t MIP_MTIP_BIT     = 64'h0000_0000_0000_0080;
+	localparam word_t MIP_SEIP_BIT     = 64'h0000_0000_0000_0200;
 	localparam word_t MIP_MEIP_BIT     = 64'h0000_0000_0000_0800;
 	localparam word_t MIP_HW_MASK      = MIP_MSIP_BIT | MIP_MTIP_BIT | MIP_MEIP_BIT;
 
@@ -375,10 +382,19 @@ module core import common::*;(
 		end
 	endfunction
 
+	function automatic logic trap_delegated(input logic is_interrupt, input word_t cause, input logic [1:0] from_priv);
+		if (from_priv == PRIV_M || |cause[63:6]) begin
+			trap_delegated = 1'b0;
+		end
+		else begin
+			trap_delegated = is_interrupt ? csr_mideleg[cause[5:0]] : csr_medeleg[cause[5:0]];
+		end
+	endfunction
+
 	logic id_wen, id_use_imm, id_is_word, id_valid;
 	logic id_is_md, id_is_lui, id_is_auipc, id_is_load, id_is_store, id_is_amo;
 	logic id_is_branch, id_is_jal, id_is_jalr, id_is_csr, id_is_fence;
-	logic id_is_ecall, id_is_ebreak, id_is_mret, id_is_sfence_vma;
+	logic id_is_ecall, id_is_ebreak, id_is_mret, id_is_sret, id_is_sfence_vma;
 	logic [3:0] id_alu_op;
 	logic [2:0] id_branch_op;
 	logic [3:0] id_md_op;
@@ -399,7 +415,7 @@ module core import common::*;(
 	logic [4:0] id_amo_op;
 	logic id_control_misaligned, id_load_misaligned, id_store_misaligned;
 	logic id_instr_access_fault, id_load_access_fault, id_store_access_fault;
-	logic id_sync_exception, id_interrupt, id_trap, id_trap_is_interrupt;
+	logic id_sync_exception, id_interrupt, id_trap, id_trap_is_interrupt, id_trap_to_s;
 	word_t id_interrupt_cause, id_trap_cause, id_trap_tval;
 
 	localparam logic [3:0] ALU_ADD  = 4'd0;
@@ -477,6 +493,7 @@ module core import common::*;(
 		id_is_ecall = 1'b0;
 		id_is_ebreak = 1'b0;
 		id_is_mret = 1'b0;
+		id_is_sret = 1'b0;
 		id_alu_op = ALU_ADD;
 		id_branch_op = BR_EQ;
 		id_md_op = MD_NONE;
@@ -683,6 +700,7 @@ module core import common::*;(
 						3'b000: begin
 							if (if_id_instr[31:20] == 12'h000) id_is_ecall = 1'b1;
 							else if (if_id_instr[31:20] == 12'h001) id_is_ebreak = 1'b1;
+							else if (if_id_instr[31:20] == 12'h102) id_is_sret = 1'b1;
 							else if (if_id_instr[31:20] == 12'h302) id_is_mret = 1'b1;
 						end
 					default: begin
@@ -919,7 +937,8 @@ module core import common::*;(
 		!((id_csr_addr[11:10] == 2'b11) && id_csr_wen);
 		assign id_instr_legal =
 			(id_wen && !id_is_csr) || id_is_store || id_is_branch ||
-			id_is_fence || id_is_ecall || id_is_ebreak || (id_is_mret && current_priv == PRIV_M) ||
+			id_is_fence || id_is_ecall || id_is_ebreak ||
+			(id_is_sret && current_priv != PRIV_U) || (id_is_mret && current_priv == PRIV_M) ||
 			id_is_sfence_vma || id_csr_legal || (if_id_instr == 32'h0005_006b);
 
 	always_comb begin
@@ -969,6 +988,21 @@ module core import common::*;(
 				id_interrupt_cause = 64'd7;
 			end
 		end
+		if (!id_interrupt && id_valid &&
+			((current_priv == PRIV_U) || ((current_priv == PRIV_S) && csr_mstatus[1]))) begin
+			if (mip_value[9] && csr_mie[9] && csr_mideleg[9]) begin
+				id_interrupt = 1'b1;
+				id_interrupt_cause = 64'd9;
+			end
+			else if (mip_value[1] && csr_mie[1] && csr_mideleg[1]) begin
+				id_interrupt = 1'b1;
+				id_interrupt_cause = 64'd1;
+			end
+			else if (mip_value[5] && csr_mie[5] && csr_mideleg[5]) begin
+				id_interrupt = 1'b1;
+				id_interrupt_cause = 64'd5;
+			end
+		end
 	end
 
 	always_comb begin
@@ -1010,19 +1044,22 @@ module core import common::*;(
 				id_trap_cause = 64'd3;
 			end
 			else if (id_is_ecall) begin
-				id_trap_cause = (current_priv == PRIV_U) ? 64'd8 : 64'd11;
+				id_trap_cause = (current_priv == PRIV_U) ? 64'd8 :
+					((current_priv == PRIV_S) ? 64'd9 : 64'd11);
 			end
-	end
+		end
 
-	assign id_trap = id_sync_exception || id_interrupt;
-	assign id_trap_is_interrupt = !id_sync_exception && id_interrupt;
-	assign id_redirect = id_trap || (id_is_jal || id_is_jalr) ||
-		(id_is_branch && id_branch_taken) || id_is_csr || id_is_mret;
-	assign if_can_request = !if_pending && !mem_pending &&
-		(!if_id_valid || (id_consume && !id_redirect));
-	assign id_redirect_target = id_trap ? {csr_mtvec[63:2], 2'b00} :
-		(id_is_mret ? csr_mepc :
-		(id_is_csr ? (if_id_pc + 64'd4) : id_control_target));
+		assign id_trap = id_sync_exception || id_interrupt;
+		assign id_trap_is_interrupt = !id_sync_exception && id_interrupt;
+		assign id_trap_to_s = id_trap && trap_delegated(id_trap_is_interrupt, id_trap_cause, current_priv);
+		assign id_redirect = id_trap || (id_is_jal || id_is_jalr) ||
+			(id_is_branch && id_branch_taken) || id_is_csr || id_is_mret || id_is_sret;
+		assign if_can_request = !if_pending && !mem_pending &&
+			(!if_id_valid || (id_consume && !id_redirect));
+		assign id_redirect_target = id_trap ? (id_trap_to_s ? {csr_stvec[63:2], 2'b00} : {csr_mtvec[63:2], 2'b00}) :
+			(id_is_mret ? csr_mepc :
+			(id_is_sret ? csr_sepc :
+			(id_is_csr ? (if_id_pc + 64'd4) : id_control_target)));
 	assign id_store_mask = make_store_mask(id_mem_size, id_mem_addr[2:0]);
 	assign id_store_data = make_store_data(id_mem_size, id_mem_addr[2:0], rs2_val);
 	assign id_fire = id_valid && !mem_pending;
@@ -1045,7 +1082,7 @@ module core import common::*;(
 	logic ex_wb_is_csr, ex_wb_csr_wen;
 	csr_addr_t ex_wb_csr_addr;
 	word_t ex_wb_csr_wdata;
-	logic ex_wb_is_mret;
+		logic ex_wb_is_mret, ex_wb_is_sret;
 	logic ex_wb_trap_valid, ex_wb_trap_is_interrupt;
 	word_t ex_wb_trap_cause, ex_wb_trap_tval;
 	addr_t ex_wb_trap_pc;
@@ -1095,6 +1132,7 @@ module core import common::*;(
 			ex_wb_csr_addr <= '0;
 			ex_wb_csr_wdata <= '0;
 			ex_wb_is_mret <= 1'b0;
+			ex_wb_is_sret <= 1'b0;
 			ex_wb_trap_valid <= 1'b0;
 			ex_wb_trap_is_interrupt <= 1'b0;
 			ex_wb_trap_cause <= '0;
@@ -1119,12 +1157,13 @@ module core import common::*;(
 			ex_wb_store_mask <= '0;
 			ex_wb_amo_op <= '0;
 			ex_wb_atomic_src_data <= '0;
-			ex_wb_is_csr <= 1'b0;
-			ex_wb_csr_wen <= 1'b0;
-			ex_wb_csr_addr <= '0;
-			ex_wb_csr_wdata <= '0;
-			ex_wb_is_mret <= 1'b0;
-			ex_wb_trap_valid <= 1'b0;
+				ex_wb_is_csr <= 1'b0;
+				ex_wb_csr_wen <= 1'b0;
+				ex_wb_csr_addr <= '0;
+				ex_wb_csr_wdata <= '0;
+				ex_wb_is_mret <= 1'b0;
+				ex_wb_is_sret <= 1'b0;
+				ex_wb_trap_valid <= 1'b0;
 			ex_wb_trap_is_interrupt <= 1'b0;
 			ex_wb_trap_cause <= '0;
 			ex_wb_trap_tval <= '0;
@@ -1218,6 +1257,7 @@ module core import common::*;(
 				ex_wb_csr_addr <= id_csr_addr;
 				ex_wb_csr_wdata <= id_csr_wdata;
 				ex_wb_is_mret <= id_is_mret && !id_trap;
+				ex_wb_is_sret <= id_is_sret && !id_trap;
 				ex_wb_trap_valid <= id_trap;
 				ex_wb_trap_is_interrupt <= id_trap_is_interrupt;
 				ex_wb_trap_cause <= id_trap_cause;
@@ -1244,7 +1284,7 @@ module core import common::*;(
 	logic wb_is_csr, wb_csr_wen;
 	csr_addr_t wb_csr_addr;
 	word_t wb_csr_wdata;
-	logic wb_is_mret;
+	logic wb_is_mret, wb_is_sret;
 	logic wb_trap_valid, wb_trap_is_interrupt;
 	word_t wb_trap_cause, wb_trap_tval;
 	addr_t wb_trap_pc;
@@ -1271,6 +1311,7 @@ module core import common::*;(
 	assign wb_csr_addr = ex_wb_csr_addr;
 	assign wb_csr_wdata = ex_wb_csr_wdata;
 	assign wb_is_mret = ex_wb_is_mret;
+	assign wb_is_sret = ex_wb_is_sret;
 	assign wb_trap_valid = ex_wb_trap_valid;
 	assign wb_trap_is_interrupt = ex_wb_trap_is_interrupt;
 	assign wb_trap_cause = ex_wb_trap_cause;
@@ -1278,16 +1319,27 @@ module core import common::*;(
 	assign wb_trap_pc = ex_wb_trap_pc;
 	assign wb_priv = ex_wb_priv;
 
-	word_t mstatus_trap_next, mstatus_mret_next;
-	logic [1:0] mret_priv_next;
-	assign mstatus_trap_next = (csr_mstatus & ~(MSTATUS_MPP_MASK | MSTATUS_MPIE_BIT | MSTATUS_MIE_BIT)) |
+	word_t mstatus_mtrap_next, mstatus_strap_next, mstatus_mret_next, mstatus_sret_next;
+	logic [1:0] trap_priv_next, mret_priv_next, sret_priv_next;
+	logic wb_trap_to_s;
+	assign wb_trap_to_s = wb_trap_valid && trap_delegated(wb_trap_is_interrupt, wb_trap_cause, wb_priv);
+	assign trap_priv_next = wb_trap_to_s ? PRIV_S : PRIV_M;
+	assign mstatus_mtrap_next = (csr_mstatus & ~(MSTATUS_MPP_MASK | MSTATUS_MPIE_BIT | MSTATUS_MIE_BIT)) |
 		(csr_mstatus[3] ? MSTATUS_MPIE_BIT : 64'd0) | {51'd0, wb_priv, 11'd0};
-	assign mret_priv_next = (csr_mstatus[12:11] == PRIV_M) ? PRIV_M : PRIV_U;
+	assign mstatus_strap_next = (csr_mstatus & ~(MSTATUS_SPP_BIT | MSTATUS_SPIE_BIT | MSTATUS_SIE_BIT)) |
+		(csr_mstatus[1] ? MSTATUS_SPIE_BIT : 64'd0) |
+		((wb_priv == PRIV_S) ? MSTATUS_SPP_BIT : 64'd0);
+	assign mret_priv_next = (csr_mstatus[12:11] == PRIV_M) ? PRIV_M :
+		((csr_mstatus[12:11] == PRIV_S) ? PRIV_S : PRIV_U);
+	assign sret_priv_next = csr_mstatus[8] ? PRIV_S : PRIV_U;
 	assign mstatus_mret_next = (csr_mstatus & ~(MSTATUS_MPP_MASK | MSTATUS_MPIE_BIT | MSTATUS_MIE_BIT | MSTATUS_XS_MASK |
 		((csr_mstatus[12:11] == PRIV_M) ? 64'd0 : MSTATUS_MPRV_BIT))) |
 		MSTATUS_MPIE_BIT | (csr_mstatus[7] ? MSTATUS_MIE_BIT : 64'd0);
-	assign fetch_priv = wb_trap_valid ? PRIV_M :
-		((wb_valid && wb_is_mret) ? mret_priv_next : current_priv);
+	assign mstatus_sret_next = (csr_mstatus & ~(MSTATUS_SPP_BIT | MSTATUS_SPIE_BIT | MSTATUS_SIE_BIT | MSTATUS_MPRV_BIT)) |
+		MSTATUS_SPIE_BIT | (csr_mstatus[5] ? MSTATUS_SIE_BIT : 64'd0);
+	assign fetch_priv = wb_trap_valid ? trap_priv_next :
+		((wb_valid && wb_is_mret) ? mret_priv_next :
+		((wb_valid && wb_is_sret) ? sret_priv_next : current_priv));
 
 	always_ff @(posedge clk) begin
 		if (reset) begin
@@ -1317,15 +1369,28 @@ module core import common::*;(
 			csr_mcycle <= csr_mcycle + 64'd1;
 			csr_mhartid <= '0;
 			if (wb_trap_valid) begin
-				csr_mstatus <= mstatus_trap_next & MSTATUS_MASK;
-				csr_mepc <= wb_trap_pc;
-				csr_mcause <= {wb_trap_is_interrupt, wb_trap_cause[62:0]};
-				csr_mtval <= wb_trap_tval;
-				current_priv <= PRIV_M;
+				if (wb_trap_to_s) begin
+					csr_mstatus <= mstatus_strap_next & MSTATUS_MASK;
+					csr_sepc <= wb_trap_pc;
+					csr_scause <= {wb_trap_is_interrupt, wb_trap_cause[62:0]};
+					csr_stval <= wb_trap_tval;
+					current_priv <= PRIV_S;
+				end
+				else begin
+					csr_mstatus <= mstatus_mtrap_next & MSTATUS_MASK;
+					csr_mepc <= wb_trap_pc;
+					csr_mcause <= {wb_trap_is_interrupt, wb_trap_cause[62:0]};
+					csr_mtval <= wb_trap_tval;
+					current_priv <= PRIV_M;
+				end
 			end
 			else if (wb_valid && wb_is_mret) begin
 				csr_mstatus <= mstatus_mret_next & MSTATUS_MASK;
 				current_priv <= mret_priv_next;
+			end
+			else if (wb_valid && wb_is_sret) begin
+				csr_mstatus <= mstatus_sret_next & MSTATUS_MASK;
+				current_priv <= sret_priv_next;
 			end
 			else if (wb_valid && wb_is_csr && wb_csr_wen) begin
 				unique case (wb_csr_addr)
