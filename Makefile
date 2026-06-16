@@ -7,6 +7,12 @@ no_arguments:
 	@echo "  - test-lab1: Run lab1 test"
 	@echo "  - test-lab2: Run lab2 test"
 	@echo "  - test-lab3: Run lab3 test"
+	@echo "  - test-lab4: Run lab4 test"
+	@echo "  - test-lab5: Run lab5 test"
+	@echo "  - test-lab6: Run lab6 test"
+	@echo "  - test-labplus-2: Run Lab+ performance test"
+	@echo "  - test-labplus-3: Run Lab+ atomic extension test"
+	@echo "  - test-labplus-4: Run Lab+ PMP test"
 
 init:
 	git submodule update --init --recursive
@@ -53,6 +59,25 @@ test-lab3: sim
 
 test-lab3-extra: sim
 	TEST=$(TEST) ./build/emu --diff $(NEMU_HOME)/riscv64-nemu-interpreter-so -i ./ready-to-run/lab3/lab3-extra-test.bin $(VOPT) || true
+
+test-lab4: sim
+	TEST=$(TEST) ./build/emu --diff $(NEMU_HOME)/riscv64-nemu-interpreter-so -i ./ready-to-run/lab4/lab4-test.bin $(VOPT) || true
+
+test-lab5: sim
+	TEST=$(TEST) ./build/emu --diff $(NEMU_HOME)/riscv64-nemu-interpreter-so -i ./ready-to-run/lab5/kernel.bin $(VOPT) || true
+
+test-lab6: sim
+	TEST=sys ./build/emu --no-diff -i ./ready-to-run/lab6/lab6-test.bin $(VOPT) || true
+
+test-labplus-2: sim
+	TEST=$(TEST) ./build/emu --diff $(NEMU_HOME)/riscv64-nemu-interpreter-so -i ./ready-to-run/lab+/2/microbench-riscv64-nutshell.bin $(VOPT) || true
+
+test-labplus-3: sim
+	TEST=$(TEST) ./build/emu --diff $(NEMU_HOME)/riscv64-nemu-interpreter-so -i ./ready-to-run/lab+/3/atomicity.bin $(VOPT) || true
+
+test-labplus-4: sim
+	TEST=all ./build/emu --no-diff -i ./ready-to-run/lab+/4/all-test-privfull.bin $(VOPT) || true
+
 clean:
 	rm -rf build
 

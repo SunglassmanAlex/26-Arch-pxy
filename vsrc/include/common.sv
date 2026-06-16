@@ -188,6 +188,7 @@ typedef struct packed {
     logic  addr_ok;     // is the address accepted by cache?
     logic  data_ok;     // is the field "data" valid?
     word_t data;        // the data read from cache
+    addr_t paddr;       // physical address after optional translation
 } dbus_resp_t;
 
 /**
@@ -238,6 +239,7 @@ typedef struct packed {
     logic  ready;       // is data arrived in this cycle?
     logic  last;        // is it the last word?
     word_t data;        // the data from AXI bus
+    addr_t paddr;       // physical address after optional translation
 } cbus_resp_t;
 
 endpackage

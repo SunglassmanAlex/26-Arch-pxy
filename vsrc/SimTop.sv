@@ -1,9 +1,11 @@
 `ifdef VERILATOR
 `include "include/common.sv"
+`include "include/csr.sv"
 `include "src/core.sv"
 `include "util/IBusToCBus.sv"
 `include "util/DBusToCBus.sv"
 `include "util/CBusArbiter.sv"
+`include "util/MMU.sv"
 
 module SimTop import common::*;(
   input         clock,
@@ -19,9 +21,13 @@ module SimTop import common::*;(
   input  [7:0]  io_uart_in_ch
 );
 
-    cbus_req_t  oreq;
-    cbus_resp_t oresp;
+    /* verilator lint_off UNOPTFLAT */
+    cbus_req_t  oreq, cpu_oreq;
+    cbus_resp_t oresp, cpu_oresp;
+    /* verilator lint_on UNOPTFLAT */
     logic trint, swint, exint;
+    logic [1:0] priv_mode;
+    word_t satp;
 
     ibus_req_t  ireq;
     ibus_resp_t iresp;
@@ -31,7 +37,9 @@ module SimTop import common::*;(
     cbus_resp_t icresp, dcresp;
 
     core core(
-      .clk(clock), .reset, .ireq, .iresp, .dreq, .dresp, .trint, .swint, .exint
+      .clk(clock), .reset, .ireq, .iresp, .dreq, .dresp,
+      .priv_mode(priv_mode), .satp(satp),
+      .trint, .swint, .exint
     );
 
     IBusToCBus icvt(.*);
@@ -40,7 +48,18 @@ module SimTop import common::*;(
         .clk(clock), .reset,
         .ireqs({icreq, dcreq}),
         .iresps({icresp, dcresp}),
-        .*
+        .oreq(cpu_oreq),
+        .oresp(cpu_oresp)
+    );
+
+    MMU mmu(
+        .clk(clock), .reset,
+        .priv_mode(priv_mode),
+        .satp(satp),
+        .ireq(cpu_oreq),
+        .iresp(cpu_oresp),
+        .oreq(oreq),
+        .oresp(oresp)
     );
 
     RAMHelper2 ram(

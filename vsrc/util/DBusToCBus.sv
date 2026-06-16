@@ -32,6 +32,7 @@ module DBusToCBus
     assign dresp.addr_ok = okay;
     assign dresp.data_ok = okay;
     assign dresp.data    = dcresp.data;
+    assign dresp.paddr   = dcresp.paddr;
 endmodule
 
 

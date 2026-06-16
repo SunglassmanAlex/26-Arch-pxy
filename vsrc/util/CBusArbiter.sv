@@ -6,11 +6,6 @@
 `else
 
 `endif
-/**
- * this implementation is not efficient, since
- * it adds one cycle lantency to all requests.
- */
-
 module CBusArbiter
 	import common::*;#(
     parameter int NUM_INPUTS = 2,  // NOTE: NUM_INPUTS >= 1
@@ -28,8 +23,7 @@ module CBusArbiter
     int index, select;
     cbus_req_t saved_req, selected_req;
 
-    // assign oreq = ireqs[index];
-    assign oreq = busy ? ireqs[index] : '0;  // prevent early issue
+    assign oreq = busy ? ireqs[index] : selected_req;
     assign selected_req = ireqs[select];
 
     // select a preferred request
@@ -53,6 +47,11 @@ module CBusArbiter
                 if (index == i)
                     iresps[i] = oresp;
             end
+        end else if (selected_req.valid) begin
+            for (int i = 0; i < NUM_INPUTS; i++) begin
+                if (select == i)
+                    iresps[i] = oresp;
+            end
         end
     end
 
@@ -62,8 +61,7 @@ module CBusArbiter
             if (oresp.last)
                 {busy, saved_req} <= '0;
         end else begin
-            // if not valid, busy <= 0
-            busy <= selected_req.valid;
+            busy <= selected_req.valid && !oresp.last;
             index <= select;
             saved_req <= selected_req;
         end

@@ -11,12 +11,29 @@ module core import common::*;(
 	input  ibus_resp_t iresp,
 	output dbus_req_t  dreq,
 	input  dbus_resp_t dresp,
+	output logic [1:0] priv_mode,
+	output word_t      satp,
 	input  logic       trint, swint, exint
 );
+	import csr_pkg::*;
+
+	localparam logic [1:0] PRIV_U = 2'b00;
+	localparam logic [1:0] PRIV_M = 2'b11;
+	localparam word_t MSTATUS_MIE_BIT  = 64'h0000_0000_0000_0008;
+	localparam word_t MSTATUS_MPIE_BIT = 64'h0000_0000_0000_0080;
+	localparam word_t MSTATUS_MPP_MASK = 64'h0000_0000_0000_1800;
+	localparam word_t MSTATUS_XS_MASK  = 64'h0000_0000_0001_8000;
+	localparam word_t MSTATUS_MPRV_BIT = 64'h0000_0000_0002_0000;
+	localparam word_t MIP_MSIP_BIT     = 64'h0000_0000_0000_0008;
+	localparam word_t MIP_MTIP_BIT     = 64'h0000_0000_0000_0080;
+	localparam word_t MIP_MEIP_BIT     = 64'h0000_0000_0000_0800;
+	localparam word_t MIP_HW_MASK      = MIP_MSIP_BIT | MIP_MTIP_BIT | MIP_MEIP_BIT;
 
 	addr_t pc, if_req_addr, if_id_pc;
-	logic  if_pending, if_id_valid;
+	logic  if_pending, if_id_valid, if_can_request;
 	u32    if_id_instr;
+	logic  if_id_access_fault;
+	addr_t if_id_fault_tval;
 	logic  id_consume;
 	logic  id_redirect;
 	addr_t id_redirect_target;
@@ -28,6 +45,7 @@ module core import common::*;(
 	word_t imm_i, imm_s, imm_u, imm_b, imm_j;
 
 	logic  mem_pending, mem_is_load, mem_is_store, mem_wen;
+	logic  mem_is_atomic, mem_atomic_write_phase, mem_atomic_is_lr, mem_atomic_is_sc;
 	logic [4:0] mem_rd;
 	addr_t mem_pc, mem_addr;
 	u32    mem_instr;
@@ -35,6 +53,25 @@ module core import common::*;(
 	strobe_t mem_strobe;
 	word_t mem_wdata;
 	logic [7:0] mem_load_optype;
+	logic [4:0] mem_amo_op;
+	word_t mem_atomic_wb_data, mem_atomic_src_data;
+	logic reservation_valid;
+	addr_t reservation_addr;
+
+	word_t csr_mstatus, csr_mtvec, csr_mip, csr_mie, csr_mscratch;
+	word_t csr_mcause, csr_mtval, csr_mepc, csr_mcycle, csr_satp;
+	word_t csr_stvec, csr_sscratch, csr_sepc, csr_scause, csr_stval;
+	word_t csr_medeleg, csr_mideleg, csr_pmpaddr0, csr_pmpcfg0;
+	word_t csr_mhartid;
+	word_t mip_value;
+	logic [1:0] current_priv, fetch_priv;
+
+	assign priv_mode = current_priv;
+	assign satp = csr_satp;
+	assign mip_value = (csr_mip & ~MIP_HW_MASK) |
+		(swint ? MIP_MSIP_BIT : 64'd0) |
+		(trint ? MIP_MTIP_BIT : 64'd0) |
+		(exint ? MIP_MEIP_BIT : 64'd0);
 
 	assign ireq.valid = if_pending;
 	assign ireq.addr  = if_req_addr;
@@ -53,21 +90,35 @@ module core import common::*;(
 			if_id_valid <= 1'b0;
 			if_id_pc <= '0;
 			if_id_instr <= '0;
+			if_id_access_fault <= 1'b0;
+			if_id_fault_tval <= '0;
 		end
 		else begin
-			if (!if_pending && !if_id_valid && !mem_pending) begin
-				if_pending <= 1'b1;
-				if_req_addr <= pc;
+			if (if_can_request) begin
+				if (pmp_access_fault(pc, MSIZE4, 1'b1, 1'b0, fetch_priv)) begin
+					if_id_valid <= 1'b1;
+					if_id_pc <= pc;
+					if_id_instr <= 32'h0000_0013;
+					if_id_access_fault <= 1'b1;
+					if_id_fault_tval <= pc;
+				end
+				else begin
+					if_pending <= 1'b1;
+					if_req_addr <= pc;
+				end
 			end
 			if (if_pending && iresp.data_ok) begin
 				if_id_valid <= 1'b1;
 				if_id_pc <= if_req_addr;
 				if_id_instr <= iresp.data;
+				if_id_access_fault <= 1'b0;
+				if_id_fault_tval <= '0;
 				pc <= if_req_addr + 64'd4;
 				if_pending <= 1'b0;
 			end
 			if (if_id_valid && id_consume) begin
 				if_id_valid <= 1'b0;
+				if_id_access_fault <= 1'b0;
 			end
 			if (if_id_valid && id_consume && id_redirect) begin
 				pc <= id_redirect_target;
@@ -158,9 +209,176 @@ module core import common::*;(
 		endcase
 	endfunction
 
+	function automatic logic [31:0] select_word(input word_t raw, input logic [2:0] ofs);
+		word_t shifted;
+		shifted = raw >> {ofs, 3'b000};
+		select_word = shifted[31:0];
+	endfunction
+
+	function automatic logic [31:0] amo_w_result(input logic [4:0] op, input logic [31:0] oldw, input logic [31:0] srcw);
+		unique case (op)
+			5'b00000: amo_w_result = oldw + srcw;                                  // AMOADD.W
+			5'b00001: amo_w_result = srcw;                                         // AMOSWAP.W
+			5'b00100: amo_w_result = oldw ^ srcw;                                  // AMOXOR.W
+			5'b01100: amo_w_result = oldw & srcw;                                  // AMOAND.W
+			5'b01000: amo_w_result = oldw | srcw;                                  // AMOOR.W
+			5'b10000: amo_w_result = ($signed(oldw) < $signed(srcw)) ? oldw : srcw; // AMOMIN.W
+			5'b10100: amo_w_result = ($signed(oldw) > $signed(srcw)) ? oldw : srcw; // AMOMAX.W
+			5'b11000: amo_w_result = (oldw < srcw) ? oldw : srcw;                  // AMOMINU.W
+			5'b11100: amo_w_result = (oldw > srcw) ? oldw : srcw;                  // AMOMAXU.W
+			default:  amo_w_result = srcw;
+		endcase
+	endfunction
+
+	function automatic logic [7:0] amo_fuop(input logic [4:0] op);
+		unique case (op)
+			5'b00010: amo_fuop = 8'o02; // LR.W
+			5'b00011: amo_fuop = 8'o06; // SC.W
+			5'b00001: amo_fuop = 8'o12; // AMOSWAP.W
+			5'b00000: amo_fuop = 8'o16; // AMOADD.W
+			5'b00100: amo_fuop = 8'o22; // AMOXOR.W
+			5'b01100: amo_fuop = 8'o26; // AMOAND.W
+			5'b01000: amo_fuop = 8'o32; // AMOOR.W
+			5'b10000: amo_fuop = 8'o36; // AMOMIN.W
+			5'b10100: amo_fuop = 8'o42; // AMOMAX.W
+			5'b11000: amo_fuop = 8'o46; // AMOMINU.W
+			5'b11100: amo_fuop = 8'o52; // AMOMAXU.W
+			default:  amo_fuop = 8'o00;
+		endcase
+	endfunction
+
+	function automatic word_t csr_read(input csr_addr_t id);
+		unique case (id)
+			CSR_MSTATUS:  csr_read = csr_mstatus;
+			CSR_SSTATUS:  csr_read = csr_mstatus & SSTATUS_MASK;
+			CSR_MTVEC:    csr_read = csr_mtvec;
+			CSR_STVEC:    csr_read = csr_stvec;
+			CSR_MIP:      csr_read = mip_value & MIP_MASK;
+			CSR_SIP:      csr_read = mip_value & 64'h222;
+			CSR_MIE:      csr_read = csr_mie;
+			CSR_SIE:      csr_read = csr_mie & 64'h222;
+			CSR_MSCRATCH: csr_read = csr_mscratch;
+			CSR_SSCRATCH: csr_read = csr_sscratch;
+			CSR_MEPC:     csr_read = csr_mepc;
+			CSR_SEPC:     csr_read = csr_sepc;
+			CSR_MCAUSE:   csr_read = csr_mcause;
+			CSR_SCAUSE:   csr_read = csr_scause;
+			CSR_MTVAL:    csr_read = csr_mtval;
+			CSR_STVAL:    csr_read = csr_stval;
+			CSR_SATP:     csr_read = csr_satp;
+			CSR_MCYCLE:   csr_read = csr_mcycle;
+			CSR_MHARTID:  csr_read = csr_mhartid;
+			CSR_MEDELEG:  csr_read = csr_medeleg;
+			CSR_MIDELEG:  csr_read = csr_mideleg;
+			CSR_PMPADDR0: csr_read = csr_pmpaddr0;
+			CSR_PMPCFG0:  csr_read = csr_pmpcfg0;
+			default:      csr_read = 64'd0;
+		endcase
+	endfunction
+
+	function automatic logic csr_supported(input csr_addr_t id);
+		unique case (id)
+			CSR_MSTATUS, CSR_SSTATUS, CSR_MTVEC, CSR_STVEC,
+			CSR_MIP, CSR_SIP, CSR_MIE, CSR_SIE,
+			CSR_MSCRATCH, CSR_SSCRATCH, CSR_MEPC, CSR_SEPC,
+			CSR_MCAUSE, CSR_SCAUSE, CSR_MTVAL, CSR_STVAL,
+			CSR_SATP, CSR_MCYCLE, CSR_MHARTID,
+			CSR_MEDELEG, CSR_MIDELEG, CSR_PMPADDR0, CSR_PMPCFG0:
+				csr_supported = 1'b1;
+			default:
+				csr_supported = 1'b0;
+		endcase
+	endfunction
+
+	function automatic logic addr_misaligned(input addr_t addr, input msize_t size);
+		unique case (size)
+			MSIZE1: addr_misaligned = 1'b0;
+			MSIZE2: addr_misaligned = addr[0];
+			MSIZE4: addr_misaligned = |addr[1:0];
+			default: addr_misaligned = |addr[2:0];
+		endcase
+	endfunction
+
+	function automatic word_t access_size_bytes(input msize_t size);
+		unique case (size)
+			MSIZE1: access_size_bytes = 64'd1;
+			MSIZE2: access_size_bytes = 64'd2;
+			MSIZE4: access_size_bytes = 64'd4;
+			default: access_size_bytes = 64'd8;
+		endcase
+	endfunction
+
+	function automatic logic pmp0_match(input addr_t addr, input msize_t size);
+		logic [1:0] addr_mode;
+		word_t start_addr, end_addr, base, top, bytes, low_mask;
+		int ones;
+		addr_mode = csr_pmpcfg0[4:3];
+		start_addr = addr;
+		end_addr = addr + access_size_bytes(size) - 64'd1;
+		base = 64'd0;
+		top = 64'd0;
+		bytes = 64'd0;
+		low_mask = 64'd0;
+		ones = 0;
+		pmp0_match = 1'b0;
+
+		unique case (addr_mode)
+			2'b01: begin // TOR, with implicit lower bound 0 for pmp0.
+				base = 64'd0;
+				top = csr_pmpaddr0 << 2;
+				pmp0_match = (start_addr >= base) && (end_addr < top);
+			end
+			2'b10: begin // NA4
+				base = csr_pmpaddr0 << 2;
+				top = base + 64'd4;
+				pmp0_match = (start_addr >= base) && (end_addr < top);
+			end
+			2'b11: begin // NAPOT
+				for (int i = 0; i < 54; i += 1) begin
+					if (csr_pmpaddr0[i]) ones += 1;
+					else break;
+				end
+				bytes = 64'd1 << (ones + 3);
+				low_mask = (ones == 0) ? 64'd0 : ((64'd1 << ones) - 64'd1);
+				base = (csr_pmpaddr0 & ~low_mask) << 2;
+				top = base + bytes;
+				pmp0_match = (start_addr >= base) && (end_addr < top);
+			end
+			default: begin
+				pmp0_match = 1'b0;
+			end
+		endcase
+	endfunction
+
+	function automatic logic pmp_access_fault(
+		input addr_t addr,
+		input msize_t size,
+		input logic is_exec,
+		input logic is_write,
+		input logic [1:0] mode
+	);
+		logic [7:0] cfg;
+		logic active, matched, permitted;
+		cfg = csr_pmpcfg0[7:0];
+		active = (cfg[4:3] != 2'b00);
+		matched = active && pmp0_match(addr, size);
+		permitted = is_exec ? cfg[2] : (is_write ? cfg[1] : cfg[0]);
+
+		if (!active) begin
+			pmp_access_fault = 1'b0;
+		end
+		else if ((mode == PRIV_M) && !cfg[7]) begin
+			pmp_access_fault = 1'b0;
+		end
+		else begin
+			pmp_access_fault = !matched || !permitted;
+		end
+	endfunction
+
 	logic id_wen, id_use_imm, id_is_word, id_valid;
-	logic id_is_md, id_is_lui, id_is_auipc, id_is_load, id_is_store;
-	logic id_is_branch, id_is_jal, id_is_jalr;
+	logic id_is_md, id_is_lui, id_is_auipc, id_is_load, id_is_store, id_is_amo;
+	logic id_is_branch, id_is_jal, id_is_jalr, id_is_csr, id_is_fence;
+	logic id_is_ecall, id_is_ebreak, id_is_mret, id_is_sfence_vma;
 	logic [3:0] id_alu_op;
 	logic [2:0] id_branch_op;
 	logic [3:0] id_md_op;
@@ -169,10 +387,20 @@ module core import common::*;(
 	word_t ex_op1, ex_op2, ex_res, ex_res_raw, md_res;
 	word_t id_jalr_target_raw;
 	addr_t id_mem_addr;
-	addr_t id_jump_target, id_branch_target;
+	addr_t id_jump_target, id_branch_target, id_control_target;
 	strobe_t id_store_mask;
 	word_t id_store_data;
 	logic id_fire, id_go_mem, id_branch_taken;
+	csr_addr_t id_csr_addr;
+	word_t id_csr_rdata, id_csr_src, id_csr_wdata;
+	logic id_csr_wen;
+	logic id_csr_legal, id_instr_legal;
+	logic id_is_lr, id_is_sc, id_sc_success;
+	logic [4:0] id_amo_op;
+	logic id_control_misaligned, id_load_misaligned, id_store_misaligned;
+	logic id_instr_access_fault, id_load_access_fault, id_store_access_fault;
+	logic id_sync_exception, id_interrupt, id_trap, id_trap_is_interrupt;
+	word_t id_interrupt_cause, id_trap_cause, id_trap_tval;
 
 	localparam logic [3:0] ALU_ADD  = 4'd0;
 	localparam logic [3:0] ALU_SUB  = 4'd1;
@@ -204,6 +432,25 @@ module core import common::*;(
 	localparam logic [3:0] MD_REMW  = 4'd9;
 	localparam logic [3:0] MD_REMUW = 4'd10;
 
+	localparam logic [4:0] AMO_ADD  = 5'b00000;
+	localparam logic [4:0] AMO_SWAP = 5'b00001;
+	localparam logic [4:0] AMO_LR   = 5'b00010;
+	localparam logic [4:0] AMO_SC   = 5'b00011;
+	localparam logic [4:0] AMO_XOR  = 5'b00100;
+	localparam logic [4:0] AMO_OR   = 5'b01000;
+	localparam logic [4:0] AMO_AND  = 5'b01100;
+	localparam logic [4:0] AMO_MIN  = 5'b10000;
+	localparam logic [4:0] AMO_MAX  = 5'b10100;
+	localparam logic [4:0] AMO_MINU = 5'b11000;
+	localparam logic [4:0] AMO_MAXU = 5'b11100;
+
+	localparam logic [2:0] CSR_RW  = 3'b001;
+	localparam logic [2:0] CSR_RS  = 3'b010;
+	localparam logic [2:0] CSR_RC  = 3'b011;
+	localparam logic [2:0] CSR_RWI = 3'b101;
+	localparam logic [2:0] CSR_RSI = 3'b110;
+	localparam logic [2:0] CSR_RCI = 3'b111;
+
 `ifdef VERILATOR
 	localparam logic ENABLE_M_EXT = 1'b1;
 `else
@@ -221,9 +468,15 @@ module core import common::*;(
 		id_is_auipc = 1'b0;
 		id_is_load = 1'b0;
 		id_is_store = 1'b0;
+		id_is_amo = 1'b0;
 		id_is_branch = 1'b0;
 		id_is_jal = 1'b0;
 		id_is_jalr = 1'b0;
+		id_is_csr = 1'b0;
+		id_is_fence = 1'b0;
+		id_is_ecall = 1'b0;
+		id_is_ebreak = 1'b0;
+		id_is_mret = 1'b0;
 		id_alu_op = ALU_ADD;
 		id_branch_op = BR_EQ;
 		id_md_op = MD_NONE;
@@ -389,6 +642,51 @@ module core import common::*;(
 					3'b010: id_mem_size = MSIZE4;
 					3'b011: id_mem_size = MSIZE8;
 					default: id_is_store = 1'b0;
+				endcase
+			end
+
+				7'b0101111: begin
+					if (fun3 == 3'b010) begin
+						id_wen = 1'b1;
+					id_is_amo = 1'b1;
+					id_mem_size = MSIZE4;
+					id_load_optype = 8'd2;
+					unique case (if_id_instr[31:27])
+						AMO_ADD, AMO_SWAP, AMO_LR, AMO_SC,
+						AMO_XOR, AMO_OR, AMO_AND,
+						AMO_MIN, AMO_MAX, AMO_MINU, AMO_MAXU: begin
+						end
+						default: begin
+							id_wen = 1'b0;
+							id_is_amo = 1'b0;
+						end
+					endcase
+					if ((if_id_instr[31:27] == AMO_LR) && (rs2 != 5'd0)) begin
+						id_wen = 1'b0;
+						id_is_amo = 1'b0;
+					end
+					end
+				end
+
+				7'b0001111: begin
+					if ((fun3 == 3'b000) || (fun3 == 3'b001)) begin
+						id_is_fence = 1'b1;
+					end
+				end
+
+				7'b1110011: begin
+					unique case (fun3)
+						CSR_RW, CSR_RS, CSR_RC, CSR_RWI, CSR_RSI, CSR_RCI: begin
+							id_wen = 1'b1;
+							id_is_csr = 1'b1;
+						end
+						3'b000: begin
+							if (if_id_instr[31:20] == 12'h000) id_is_ecall = 1'b1;
+							else if (if_id_instr[31:20] == 12'h001) id_is_ebreak = 1'b1;
+							else if (if_id_instr[31:20] == 12'h302) id_is_mret = 1'b1;
+						end
+					default: begin
+					end
 				endcase
 			end
 
@@ -586,6 +884,44 @@ module core import common::*;(
 `endif
 
 	assign ex_res = id_is_md ? md_res : (id_is_word ? sext32(ex_res_raw[31:0]) : ex_res_raw);
+	assign id_csr_addr = if_id_instr[31:20];
+	assign id_csr_rdata = csr_read(id_csr_addr);
+	assign id_csr_src = fun3[2] ? {59'd0, rs1} : rs1_val;
+	assign id_amo_op = if_id_instr[31:27];
+	assign id_is_lr = id_is_amo && (id_amo_op == AMO_LR);
+	assign id_is_sc = id_is_amo && (id_amo_op == AMO_SC);
+	assign id_is_sfence_vma =
+		((if_id_instr & 32'hfe00_7fff) == 32'h1200_0073) &&
+		(current_priv != PRIV_U);
+	always_comb begin
+		id_csr_wdata = id_csr_rdata;
+		id_csr_wen = 1'b0;
+		unique case (fun3)
+			CSR_RW, CSR_RWI: begin
+				id_csr_wdata = id_csr_src;
+				id_csr_wen = id_is_csr;
+			end
+			CSR_RS, CSR_RSI: begin
+				id_csr_wdata = id_csr_rdata | id_csr_src;
+				id_csr_wen = id_is_csr && (id_csr_src != 64'd0);
+			end
+			CSR_RC, CSR_RCI: begin
+				id_csr_wdata = id_csr_rdata & ~id_csr_src;
+				id_csr_wen = id_is_csr && (id_csr_src != 64'd0);
+			end
+			default: begin
+			end
+		endcase
+	end
+
+	assign id_csr_legal = id_is_csr && csr_supported(id_csr_addr) &&
+		(current_priv >= id_csr_addr[9:8]) &&
+		!((id_csr_addr[11:10] == 2'b11) && id_csr_wen);
+		assign id_instr_legal =
+			(id_wen && !id_is_csr) || id_is_store || id_is_branch ||
+			id_is_fence || id_is_ecall || id_is_ebreak || (id_is_mret && current_priv == PRIV_M) ||
+			id_is_sfence_vma || id_csr_legal || (if_id_instr == 32'h0005_006b);
+
 	always_comb begin
 		unique case (id_branch_op)
 			BR_EQ:  id_branch_taken = (rs1_val == rs2_val);
@@ -600,29 +936,130 @@ module core import common::*;(
 	assign id_branch_target = if_id_pc + imm_b;
 	assign id_jalr_target_raw = rs1_val + imm_i;
 	assign id_jump_target = id_is_jalr ? {id_jalr_target_raw[63:1], 1'b0} : (if_id_pc + imm_j);
-	assign id_redirect = (id_is_jal || id_is_jalr) || (id_is_branch && id_branch_taken);
-	assign id_redirect_target = id_is_branch ? id_branch_target : id_jump_target;
-	assign id_mem_addr = rs1_val + (id_is_store ? imm_s : imm_i);
+	assign id_control_target = id_is_branch ? id_branch_target : id_jump_target;
+	assign id_mem_addr = id_is_amo ? rs1_val : (rs1_val + (id_is_store ? imm_s : imm_i));
+	assign id_sc_success = id_is_sc && reservation_valid && ({id_mem_addr[63:2], 2'b00} == reservation_addr);
+	assign id_control_misaligned =
+		(id_is_jalr && |id_jalr_target_raw[1:0]) ||
+		(((id_is_jal || (id_is_branch && id_branch_taken))) && |id_control_target[1:0]);
+	assign id_load_misaligned = id_is_load && addr_misaligned(id_mem_addr, id_mem_size);
+	assign id_store_misaligned = (id_is_store || id_is_amo) && addr_misaligned(id_mem_addr, id_mem_size);
+	assign id_instr_access_fault = id_valid && if_id_access_fault;
+	assign id_load_access_fault =
+		(id_is_load || (id_is_amo && !id_is_sc)) &&
+		pmp_access_fault(id_mem_addr, id_mem_size, 1'b0, 1'b0, current_priv);
+	assign id_store_access_fault =
+		(id_is_store || (id_is_amo && !id_is_lr)) &&
+		pmp_access_fault(id_mem_addr, id_mem_size, 1'b0, 1'b1, current_priv);
+
+	always_comb begin
+		id_interrupt = 1'b0;
+		id_interrupt_cause = 64'd0;
+		if (id_valid && ((current_priv != PRIV_M) || csr_mstatus[3])) begin
+			if (mip_value[11] && csr_mie[11]) begin
+				id_interrupt = 1'b1;
+				id_interrupt_cause = 64'd11;
+			end
+			else if (mip_value[3] && csr_mie[3]) begin
+				id_interrupt = 1'b1;
+				id_interrupt_cause = 64'd3;
+			end
+			else if (mip_value[7] && csr_mie[7]) begin
+				id_interrupt = 1'b1;
+				id_interrupt_cause = 64'd7;
+			end
+		end
+	end
+
+	always_comb begin
+			id_sync_exception = id_valid &&
+				(id_control_misaligned || id_instr_access_fault || !id_instr_legal ||
+				 id_load_misaligned || id_load_access_fault || id_store_misaligned ||
+				 id_store_access_fault || id_is_ecall || id_is_ebreak);
+		id_trap_cause = id_interrupt_cause;
+		id_trap_tval = 64'd0;
+		if (id_control_misaligned) begin
+			id_trap_cause = 64'd0;
+			id_trap_tval = id_is_jalr ? id_jalr_target_raw : id_control_target;
+		end
+		else if (id_instr_access_fault) begin
+			id_trap_cause = 64'd1;
+			id_trap_tval = if_id_fault_tval;
+		end
+		else if (!id_instr_legal) begin
+			id_trap_cause = 64'd2;
+			id_trap_tval = {32'd0, if_id_instr};
+		end
+		else if (id_load_misaligned) begin
+			id_trap_cause = 64'd4;
+			id_trap_tval = id_mem_addr;
+		end
+		else if (id_load_access_fault) begin
+			id_trap_cause = 64'd5;
+			id_trap_tval = id_mem_addr;
+		end
+		else if (id_store_misaligned) begin
+			id_trap_cause = 64'd6;
+			id_trap_tval = id_mem_addr;
+		end
+			else if (id_store_access_fault) begin
+				id_trap_cause = 64'd7;
+				id_trap_tval = id_mem_addr;
+			end
+			else if (id_is_ebreak) begin
+				id_trap_cause = 64'd3;
+			end
+			else if (id_is_ecall) begin
+				id_trap_cause = (current_priv == PRIV_U) ? 64'd8 : 64'd11;
+			end
+	end
+
+	assign id_trap = id_sync_exception || id_interrupt;
+	assign id_trap_is_interrupt = !id_sync_exception && id_interrupt;
+	assign id_redirect = id_trap || (id_is_jal || id_is_jalr) ||
+		(id_is_branch && id_branch_taken) || id_is_csr || id_is_mret;
+	assign if_can_request = !if_pending && !mem_pending &&
+		(!if_id_valid || (id_consume && !id_redirect));
+	assign id_redirect_target = id_trap ? {csr_mtvec[63:2], 2'b00} :
+		(id_is_mret ? csr_mepc :
+		(id_is_csr ? (if_id_pc + 64'd4) : id_control_target));
 	assign id_store_mask = make_store_mask(id_mem_size, id_mem_addr[2:0]);
 	assign id_store_data = make_store_data(id_mem_size, id_mem_addr[2:0], rs2_val);
 	assign id_fire = id_valid && !mem_pending;
-	assign id_go_mem = id_fire && (id_is_load || id_is_store);
+	assign id_go_mem = id_fire &&
+		(id_is_load || id_is_store || (id_is_amo && !id_is_sc) || (id_is_sc && id_sc_success)) &&
+		!id_trap;
 	assign id_consume = id_fire;
 
 	logic ex_wb_valid, ex_wb_wen, ex_wb_is_load, ex_wb_is_store;
+	logic ex_wb_is_atomic;
 	logic [4:0] ex_wb_rd;
 	word_t ex_wb_data;
-	addr_t ex_wb_pc, ex_wb_mem_addr;
+	addr_t ex_wb_pc, ex_wb_mem_addr, ex_wb_mem_paddr;
 	u32 ex_wb_instr;
 	logic [7:0] ex_wb_load_optype;
 	word_t ex_wb_store_data;
 	strobe_t ex_wb_store_mask;
+	logic [4:0] ex_wb_amo_op;
+	word_t ex_wb_atomic_src_data;
+	logic ex_wb_is_csr, ex_wb_csr_wen;
+	csr_addr_t ex_wb_csr_addr;
+	word_t ex_wb_csr_wdata;
+	logic ex_wb_is_mret;
+	logic ex_wb_trap_valid, ex_wb_trap_is_interrupt;
+	word_t ex_wb_trap_cause, ex_wb_trap_tval;
+	addr_t ex_wb_trap_pc;
+	logic [1:0] ex_wb_priv;
 
 	always_ff @(posedge clk) begin
 		if (reset) begin
 			mem_pending <= 1'b0;
 			mem_is_load <= 1'b0;
 			mem_is_store <= 1'b0;
+			mem_is_atomic <= 1'b0;
+			mem_atomic_write_phase <= 1'b0;
+			mem_atomic_is_lr <= 1'b0;
+			mem_atomic_is_sc <= 1'b0;
 			mem_wen <= 1'b0;
 			mem_rd <= '0;
 			mem_pc <= '0;
@@ -632,107 +1069,304 @@ module core import common::*;(
 			mem_strobe <= '0;
 			mem_wdata <= '0;
 			mem_load_optype <= '0;
+			mem_amo_op <= '0;
+			mem_atomic_wb_data <= '0;
+			mem_atomic_src_data <= '0;
+			reservation_valid <= 1'b0;
+			reservation_addr <= '0;
 			ex_wb_valid <= 1'b0;
 			ex_wb_wen <= 1'b0;
 			ex_wb_is_load <= 1'b0;
 			ex_wb_is_store <= 1'b0;
+			ex_wb_is_atomic <= 1'b0;
 			ex_wb_rd <= '0;
 			ex_wb_data <= '0;
 			ex_wb_pc <= '0;
 			ex_wb_instr <= '0;
 			ex_wb_mem_addr <= '0;
+			ex_wb_mem_paddr <= '0;
 			ex_wb_load_optype <= '0;
 			ex_wb_store_data <= '0;
 			ex_wb_store_mask <= '0;
+			ex_wb_amo_op <= '0;
+			ex_wb_atomic_src_data <= '0;
+			ex_wb_is_csr <= 1'b0;
+			ex_wb_csr_wen <= 1'b0;
+			ex_wb_csr_addr <= '0;
+			ex_wb_csr_wdata <= '0;
+			ex_wb_is_mret <= 1'b0;
+			ex_wb_trap_valid <= 1'b0;
+			ex_wb_trap_is_interrupt <= 1'b0;
+			ex_wb_trap_cause <= '0;
+			ex_wb_trap_tval <= '0;
+			ex_wb_trap_pc <= '0;
+			ex_wb_priv <= PRIV_M;
 		end
 		else begin
 			ex_wb_valid <= 1'b0;
 			ex_wb_wen <= 1'b0;
 			ex_wb_is_load <= 1'b0;
 			ex_wb_is_store <= 1'b0;
+			ex_wb_is_atomic <= 1'b0;
 			ex_wb_rd <= '0;
 			ex_wb_data <= '0;
 			ex_wb_pc <= '0;
 			ex_wb_instr <= '0;
 			ex_wb_mem_addr <= '0;
+			ex_wb_mem_paddr <= '0;
 			ex_wb_load_optype <= '0;
 			ex_wb_store_data <= '0;
 			ex_wb_store_mask <= '0;
+			ex_wb_amo_op <= '0;
+			ex_wb_atomic_src_data <= '0;
+			ex_wb_is_csr <= 1'b0;
+			ex_wb_csr_wen <= 1'b0;
+			ex_wb_csr_addr <= '0;
+			ex_wb_csr_wdata <= '0;
+			ex_wb_is_mret <= 1'b0;
+			ex_wb_trap_valid <= 1'b0;
+			ex_wb_trap_is_interrupt <= 1'b0;
+			ex_wb_trap_cause <= '0;
+			ex_wb_trap_tval <= '0;
+			ex_wb_trap_pc <= '0;
+			ex_wb_priv <= current_priv;
 
 			if (mem_pending && dresp.data_ok) begin
-				mem_pending <= 1'b0;
-				mem_is_load <= 1'b0;
-				mem_is_store <= 1'b0;
-				mem_wen <= 1'b0;
-				ex_wb_valid <= 1'b1;
-				ex_wb_wen <= mem_is_load ? mem_wen : 1'b0;
-				ex_wb_is_load <= mem_is_load;
-				ex_wb_is_store <= mem_is_store;
-				ex_wb_rd <= mem_rd;
-				ex_wb_data <= mem_is_load ? make_load_data(dresp.data, mem_addr[2:0], mem_load_optype) : 64'd0;
-				ex_wb_pc <= mem_pc;
-				ex_wb_instr <= mem_instr;
-				ex_wb_mem_addr <= mem_addr;
-				ex_wb_load_optype <= mem_load_optype;
-				ex_wb_store_data <= mem_wdata;
-				ex_wb_store_mask <= mem_strobe;
+				if (mem_is_atomic && !mem_atomic_write_phase && !mem_atomic_is_lr) begin
+					logic [31:0] old_word, new_word;
+					old_word = select_word(dresp.data, mem_addr[2:0]);
+					new_word = amo_w_result(mem_amo_op, old_word, mem_wdata[31:0]);
+					mem_atomic_wb_data <= sext32(old_word);
+					mem_atomic_write_phase <= 1'b1;
+					mem_strobe <= make_store_mask(MSIZE4, mem_addr[2:0]);
+					mem_wdata <= make_store_data(MSIZE4, mem_addr[2:0], {32'd0, new_word});
+				end
+				else begin
+					mem_pending <= 1'b0;
+					mem_is_load <= 1'b0;
+					mem_is_store <= 1'b0;
+					mem_is_atomic <= 1'b0;
+					mem_atomic_write_phase <= 1'b0;
+					mem_atomic_is_lr <= 1'b0;
+					mem_atomic_is_sc <= 1'b0;
+					mem_wen <= 1'b0;
+					ex_wb_valid <= 1'b1;
+					ex_wb_wen <= (mem_is_load || mem_is_atomic) ? mem_wen : 1'b0;
+					ex_wb_is_load <= mem_is_load;
+					ex_wb_is_store <= mem_is_store;
+					ex_wb_is_atomic <= mem_is_atomic;
+					ex_wb_rd <= mem_rd;
+					ex_wb_data <= mem_is_atomic ?
+						(mem_atomic_is_lr ? make_load_data(dresp.data, mem_addr[2:0], 8'd2) : mem_atomic_wb_data) :
+						(mem_is_load ? make_load_data(dresp.data, mem_addr[2:0], mem_load_optype) : 64'd0);
+					ex_wb_pc <= mem_pc;
+					ex_wb_instr <= mem_instr;
+					ex_wb_mem_addr <= mem_addr;
+					ex_wb_mem_paddr <= dresp.paddr;
+					ex_wb_load_optype <= mem_load_optype;
+					ex_wb_store_data <= mem_wdata;
+					ex_wb_store_mask <= mem_strobe;
+					ex_wb_amo_op <= mem_amo_op;
+					ex_wb_atomic_src_data <= mem_atomic_src_data;
+					if (mem_is_atomic && mem_atomic_is_lr) begin
+						reservation_valid <= 1'b1;
+						reservation_addr <= {mem_addr[63:2], 2'b00};
+					end
+					else if (mem_is_atomic && mem_atomic_is_sc) begin
+						reservation_valid <= 1'b0;
+					end
+					else if (mem_is_store && reservation_valid && ({mem_addr[63:2], 2'b00} == reservation_addr)) begin
+						reservation_valid <= 1'b0;
+					end
+				end
 			end
 			else if (id_go_mem) begin
 				mem_pending <= 1'b1;
-				mem_is_load <= id_is_load;
-				mem_is_store <= id_is_store;
+				mem_is_load <= id_is_load || (id_is_amo && !id_is_sc);
+				mem_is_store <= id_is_store || (id_is_amo && !id_is_lr);
+				mem_is_atomic <= id_is_amo;
+				mem_atomic_write_phase <= id_is_sc;
+				mem_atomic_is_lr <= id_is_lr;
+				mem_atomic_is_sc <= id_is_sc;
 				mem_wen <= id_wen;
 				mem_rd <= rd;
 				mem_pc <= if_id_pc;
 				mem_instr <= if_id_instr;
 				mem_addr <= id_mem_addr;
 				mem_size <= id_mem_size;
-				mem_strobe <= id_is_store ? id_store_mask : 8'd0;
-				mem_wdata <= id_is_store ? id_store_data : 64'd0;
+				mem_strobe <= (id_is_store || id_is_sc) ? id_store_mask : 8'd0;
+				mem_wdata <= (id_is_store || id_is_sc) ? id_store_data : rs2_val;
 				mem_load_optype <= id_load_optype;
+				mem_amo_op <= id_amo_op;
+				mem_atomic_wb_data <= id_is_sc ? 64'd0 : 64'd0;
+				mem_atomic_src_data <= rs2_val;
 			end
 			else if (id_fire) begin
-				ex_wb_valid <= 1'b1;
-				ex_wb_wen <= id_wen;
+				ex_wb_valid <= !id_trap || id_is_ecall;
+				ex_wb_wen <= id_wen && !id_trap;
 				ex_wb_rd <= rd;
 				if (id_is_lui) ex_wb_data <= imm_u;
 				else if (id_is_auipc) ex_wb_data <= if_id_pc + imm_u;
 				else if (id_is_jal || id_is_jalr) ex_wb_data <= if_id_pc + 64'd4;
+				else if (id_is_csr) ex_wb_data <= id_csr_rdata;
+				else if (id_is_sc) ex_wb_data <= 64'd1;
 				else ex_wb_data <= ex_res;
 				ex_wb_pc <= if_id_pc;
 				ex_wb_instr <= if_id_instr;
+				ex_wb_is_csr <= id_is_csr && !id_trap;
+				ex_wb_csr_wen <= id_csr_wen && !id_trap;
+				ex_wb_csr_addr <= id_csr_addr;
+				ex_wb_csr_wdata <= id_csr_wdata;
+				ex_wb_is_mret <= id_is_mret && !id_trap;
+				ex_wb_trap_valid <= id_trap;
+				ex_wb_trap_is_interrupt <= id_trap_is_interrupt;
+				ex_wb_trap_cause <= id_trap_cause;
+				ex_wb_trap_tval <= id_trap_tval;
+				ex_wb_trap_pc <= if_id_pc;
+				ex_wb_priv <= current_priv;
+				if (id_is_sc && !id_trap) begin
+					reservation_valid <= 1'b0;
+				end
 			end
 		end
 	end
 
-	logic wb_valid, wb_wen, wb_is_load, wb_is_store;
+	logic wb_valid, wb_wen, wb_is_load, wb_is_store, wb_is_atomic;
 	logic [4:0] wb_rd;
 	word_t wb_data;
-	addr_t wb_pc, wb_mem_addr;
+	addr_t wb_pc, wb_mem_addr, wb_mem_paddr;
 	u32 wb_instr;
 	logic [7:0] wb_load_optype;
 	word_t wb_store_data;
 	strobe_t wb_store_mask;
+	logic [4:0] wb_amo_op;
+	word_t wb_atomic_src_data;
+	logic wb_is_csr, wb_csr_wen;
+	csr_addr_t wb_csr_addr;
+	word_t wb_csr_wdata;
+	logic wb_is_mret;
+	logic wb_trap_valid, wb_trap_is_interrupt;
+	word_t wb_trap_cause, wb_trap_tval;
+	addr_t wb_trap_pc;
+	logic [1:0] wb_priv;
 
 	assign wb_valid = ex_wb_valid;
 	assign wb_wen = ex_wb_wen;
 	assign wb_is_load = ex_wb_is_load;
 	assign wb_is_store = ex_wb_is_store;
+	assign wb_is_atomic = ex_wb_is_atomic;
 	assign wb_rd = ex_wb_rd;
 	assign wb_data = ex_wb_data;
 	assign wb_pc = ex_wb_pc;
 	assign wb_instr = ex_wb_instr;
 	assign wb_mem_addr = ex_wb_mem_addr;
+	assign wb_mem_paddr = ex_wb_mem_paddr;
 	assign wb_load_optype = ex_wb_load_optype;
 	assign wb_store_data = ex_wb_store_data;
 	assign wb_store_mask = ex_wb_store_mask;
+	assign wb_amo_op = ex_wb_amo_op;
+	assign wb_atomic_src_data = ex_wb_atomic_src_data;
+	assign wb_is_csr = ex_wb_is_csr;
+	assign wb_csr_wen = ex_wb_csr_wen;
+	assign wb_csr_addr = ex_wb_csr_addr;
+	assign wb_csr_wdata = ex_wb_csr_wdata;
+	assign wb_is_mret = ex_wb_is_mret;
+	assign wb_trap_valid = ex_wb_trap_valid;
+	assign wb_trap_is_interrupt = ex_wb_trap_is_interrupt;
+	assign wb_trap_cause = ex_wb_trap_cause;
+	assign wb_trap_tval = ex_wb_trap_tval;
+	assign wb_trap_pc = ex_wb_trap_pc;
+	assign wb_priv = ex_wb_priv;
 
-	logic dt_valid, dt_wen, dt_is_load, dt_is_store;
-	addr_t dt_pc, dt_mem_addr;
+	word_t mstatus_trap_next, mstatus_mret_next;
+	logic [1:0] mret_priv_next;
+	assign mstatus_trap_next = (csr_mstatus & ~(MSTATUS_MPP_MASK | MSTATUS_MPIE_BIT | MSTATUS_MIE_BIT)) |
+		(csr_mstatus[3] ? MSTATUS_MPIE_BIT : 64'd0) | {51'd0, wb_priv, 11'd0};
+	assign mret_priv_next = (csr_mstatus[12:11] == PRIV_M) ? PRIV_M : PRIV_U;
+	assign mstatus_mret_next = (csr_mstatus & ~(MSTATUS_MPP_MASK | MSTATUS_MPIE_BIT | MSTATUS_MIE_BIT | MSTATUS_XS_MASK |
+		((csr_mstatus[12:11] == PRIV_M) ? 64'd0 : MSTATUS_MPRV_BIT))) |
+		MSTATUS_MPIE_BIT | (csr_mstatus[7] ? MSTATUS_MIE_BIT : 64'd0);
+	assign fetch_priv = wb_trap_valid ? PRIV_M :
+		((wb_valid && wb_is_mret) ? mret_priv_next : current_priv);
+
+	always_ff @(posedge clk) begin
+		if (reset) begin
+			csr_mstatus <= '0;
+			csr_mtvec <= '0;
+			csr_mip <= '0;
+			csr_mie <= '0;
+			csr_mscratch <= '0;
+			csr_mcause <= '0;
+			csr_mtval <= '0;
+			csr_mepc <= '0;
+			csr_mcycle <= '0;
+			csr_satp <= '0;
+			csr_stvec <= '0;
+			csr_sscratch <= '0;
+			csr_sepc <= '0;
+			csr_scause <= '0;
+			csr_stval <= '0;
+			csr_medeleg <= '0;
+			csr_mideleg <= '0;
+			csr_pmpaddr0 <= '0;
+			csr_pmpcfg0 <= '0;
+			csr_mhartid <= '0;
+			current_priv <= PRIV_M;
+		end
+		else begin
+			csr_mcycle <= csr_mcycle + 64'd1;
+			csr_mhartid <= '0;
+			if (wb_trap_valid) begin
+				csr_mstatus <= mstatus_trap_next & MSTATUS_MASK;
+				csr_mepc <= wb_trap_pc;
+				csr_mcause <= {wb_trap_is_interrupt, wb_trap_cause[62:0]};
+				csr_mtval <= wb_trap_tval;
+				current_priv <= PRIV_M;
+			end
+			else if (wb_valid && wb_is_mret) begin
+				csr_mstatus <= mstatus_mret_next & MSTATUS_MASK;
+				current_priv <= mret_priv_next;
+			end
+			else if (wb_valid && wb_is_csr && wb_csr_wen) begin
+				unique case (wb_csr_addr)
+					CSR_MSTATUS:  csr_mstatus <= wb_csr_wdata & MSTATUS_MASK;
+					CSR_SSTATUS:  csr_mstatus <= (csr_mstatus & ~(SSTATUS_MASK & MSTATUS_MASK)) |
+						(wb_csr_wdata & SSTATUS_MASK & MSTATUS_MASK);
+					CSR_MTVEC:    csr_mtvec <= wb_csr_wdata & MTVEC_MASK;
+					CSR_STVEC:    csr_stvec <= wb_csr_wdata & MTVEC_MASK;
+					CSR_MIP:      csr_mip <= wb_csr_wdata & MIP_MASK;
+					CSR_SIP:      csr_mip <= (csr_mip & ~64'h222) | (wb_csr_wdata & 64'h222);
+					CSR_MIE:      csr_mie <= wb_csr_wdata;
+					CSR_SIE:      csr_mie <= (csr_mie & ~64'h222) | (wb_csr_wdata & 64'h222);
+					CSR_MSCRATCH: csr_mscratch <= wb_csr_wdata;
+					CSR_SSCRATCH: csr_sscratch <= wb_csr_wdata;
+					CSR_MEPC:     csr_mepc <= wb_csr_wdata;
+					CSR_SEPC:     csr_sepc <= wb_csr_wdata;
+					CSR_MCAUSE:   csr_mcause <= wb_csr_wdata;
+					CSR_SCAUSE:   csr_scause <= wb_csr_wdata;
+					CSR_MTVAL:    csr_mtval <= wb_csr_wdata;
+					CSR_STVAL:    csr_stval <= wb_csr_wdata;
+					CSR_SATP:     csr_satp <= wb_csr_wdata;
+					CSR_MCYCLE:   csr_mcycle <= wb_csr_wdata;
+					CSR_MEDELEG:  csr_medeleg <= wb_csr_wdata & MEDELEG_MASK;
+					CSR_MIDELEG:  csr_mideleg <= wb_csr_wdata & MIDELEG_MASK;
+					CSR_PMPADDR0: csr_pmpaddr0 <= wb_csr_wdata;
+					CSR_PMPCFG0:  csr_pmpcfg0 <= wb_csr_wdata;
+					default: begin
+					end
+				endcase
+			end
+		end
+	end
+
+	logic dt_valid, dt_wen, dt_is_load, dt_is_store, dt_is_atomic;
+	addr_t dt_pc, dt_mem_addr, dt_mem_paddr;
 	u32 dt_instr;
 	logic [7:0] dt_wdest, dt_load_optype;
 	word_t dt_wdata, dt_store_data;
 	strobe_t dt_store_mask;
+	logic [4:0] dt_amo_op;
+	word_t dt_atomic_src_data;
 	addr_t dt_store_addr;
 	logic store_ev_valid;
 	addr_t store_ev_addr;
@@ -746,14 +1380,18 @@ module core import common::*;(
 			dt_wen <= 1'b0;
 			dt_is_load <= 1'b0;
 			dt_is_store <= 1'b0;
+			dt_is_atomic <= 1'b0;
 			dt_pc <= '0;
 			dt_mem_addr <= '0;
+			dt_mem_paddr <= '0;
 			dt_instr <= '0;
 			dt_wdest <= '0;
 			dt_load_optype <= '0;
 			dt_wdata <= '0;
 			dt_store_data <= '0;
 			dt_store_mask <= '0;
+			dt_amo_op <= '0;
+			dt_atomic_src_data <= '0;
 			store_ev_valid <= 1'b0;
 			store_ev_addr <= '0;
 			store_ev_data <= '0;
@@ -763,16 +1401,20 @@ module core import common::*;(
 			dt_valid <= wb_valid;
 			dt_pc <= wb_pc;
 			dt_mem_addr <= wb_mem_addr;
+			dt_mem_paddr <= wb_is_load || wb_is_store ? wb_mem_paddr : wb_mem_addr;
 			dt_instr <= wb_instr;
 			dt_wen <= wb_wen && (wb_rd != 5'd0);
 			dt_is_load <= wb_is_load;
 			dt_is_store <= wb_is_store;
+			dt_is_atomic <= wb_is_atomic;
 			dt_wdest <= {3'b0, wb_rd};
 			dt_load_optype <= wb_load_optype;
 			dt_wdata <= wb_data;
 			dt_store_data <= wb_store_data;
 			dt_store_mask <= wb_store_mask;
-			store_ev_valid <= dt_valid && dt_is_store && !dt_skip;
+			dt_amo_op <= wb_amo_op;
+			dt_atomic_src_data <= wb_atomic_src_data;
+			store_ev_valid <= dt_valid && dt_is_store && !dt_is_atomic && !dt_skip;
 			store_ev_addr <= dt_store_addr;
 			store_ev_data <= dt_store_data;
 			store_ev_mask <= dt_store_mask;
@@ -799,13 +1441,21 @@ module core import common::*;(
 		end
 	end
 
-	assign dt_store_addr = {dt_mem_addr[63:3], 3'b000};
-	assign dt_skip = (dt_is_load || dt_is_store) && (dt_mem_addr[31] == 1'b0);
+	assign dt_store_addr = {dt_mem_paddr[63:3], 3'b000};
+	assign dt_skip = (dt_is_load || dt_is_store) && (dt_mem_paddr[31] == 1'b0);
 
 `ifdef VERILATOR
+	DifftestArchEvent DifftestArchEvent(
+		.clock              (clk),
+		.coreid             (csr_mhartid[7:0]),
+		.intrNO             (32'd0),
+		.cause              (32'd0),
+		.exceptionPC        (dt_pc)
+	);
+
 	DifftestInstrCommit DifftestInstrCommit(
 		.clock              (clk),
-		.coreid             (0),
+		.coreid             (csr_mhartid[7:0]),
 		.index              (0),
 		.valid              (dt_valid),
 		.pc                 (dt_pc),
@@ -820,7 +1470,7 @@ module core import common::*;(
 
 	DifftestArchIntRegState DifftestArchIntRegState (
 		.clock              (clk),
-		.coreid             (0),
+		.coreid             (csr_mhartid[7:0]),
 		.gpr_0              (gpr[0]),
 		.gpr_1              (gpr[1]),
 		.gpr_2              (gpr[2]),
@@ -857,7 +1507,7 @@ module core import common::*;(
 
 	DifftestStoreEvent DifftestStoreEvent(
 		.clock              (clk),
-		.coreid             (0),
+		.coreid             (csr_mhartid[7:0]),
 		.index              (0),
 		.valid              (store_ev_valid),
 		.storeAddr          (store_ev_addr),
@@ -867,17 +1517,28 @@ module core import common::*;(
 
 	DifftestLoadEvent DifftestLoadEvent(
 		.clock              (clk),
-		.coreid             (0),
+		.coreid             (csr_mhartid[7:0]),
 		.index              (0),
 		.valid              (dt_valid && dt_is_load && !dt_skip),
-		.paddr              (dt_mem_addr),
+		.paddr              (dt_mem_paddr),
 		.opType             (dt_load_optype),
-		.fuType             (8'h0c)
+		.fuType             (dt_is_atomic ? 8'h0f : 8'h0c)
+	);
+
+	DifftestAtomicEvent DifftestAtomicEvent(
+		.clock              (clk),
+		.coreid             (csr_mhartid[7:0]),
+		.atomicResp         (dt_valid && dt_is_atomic && !dt_skip),
+		.atomicAddr         (dt_mem_paddr),
+		.atomicData         (dt_atomic_src_data),
+		.atomicMask         (make_store_mask(MSIZE4, dt_mem_addr[2:0])),
+		.atomicFuop         (amo_fuop(dt_amo_op)),
+		.atomicOut          (dt_wdata)
 	);
 
 	DifftestTrapEvent DifftestTrapEvent(
 		.clock              (clk),
-		.coreid             (0),
+		.coreid             (csr_mhartid[7:0]),
 		.valid              (trap_valid),
 		.code               (trap_code),
 		.pc                 (dt_pc),
@@ -887,25 +1548,25 @@ module core import common::*;(
 
 	DifftestCSRState DifftestCSRState(
 		.clock              (clk),
-		.coreid             (0),
-		.priviledgeMode     (3),
-		.mstatus            (0),
-		.sstatus            (0),
-		.mepc               (0),
-		.sepc               (0),
-		.mtval              (0),
-		.stval              (0),
-		.mtvec              (0),
-		.stvec              (0),
-		.mcause             (0),
-		.scause             (0),
-		.satp               (0),
-		.mip                (0),
-		.mie                (0),
-		.mscratch           (0),
-		.sscratch           (0),
-		.mideleg            (0),
-		.medeleg            (0)
+		.coreid             (csr_mhartid[7:0]),
+		.priviledgeMode     (current_priv),
+		.mstatus            (csr_mstatus),
+		.sstatus            (csr_mstatus & SSTATUS_MASK),
+		.mepc               (csr_mepc),
+		.sepc               (csr_sepc),
+		.mtval              (csr_mtval),
+		.stval              (csr_stval),
+		.mtvec              (csr_mtvec),
+		.stvec              (csr_stvec),
+		.mcause             (csr_mcause),
+		.scause             (csr_scause),
+		.satp               (csr_satp),
+		.mip                (mip_value & MIP_MASK),
+		.mie                (csr_mie),
+		.mscratch           (csr_mscratch),
+		.sscratch           (csr_sscratch),
+		.mideleg            (csr_mideleg),
+		.medeleg            (csr_medeleg)
 	);
 `endif
 endmodule

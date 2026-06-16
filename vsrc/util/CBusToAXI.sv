@@ -96,6 +96,7 @@ module CBusToAXI
     assign cresp.ready = ready;
     assign cresp.last  = ready && (!in_issue[R] || rlast) && is_last;
     assign cresp.data  = rdata;
+    assign cresp.paddr = saved_req.addr;
 
     // AXI driver
     always_comb begin
