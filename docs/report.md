@@ -6,7 +6,7 @@
 - 学号：24300240128
 - 课程：计算机组成与体系结构（2026 春）
 - 实验：Lab+
-- 完成日期：2026-06-16
+- 完成日期：2026-06-18
 
 ## 2. 完成内容
 
@@ -21,6 +21,7 @@
 - 新增 `EBREAK` 断点异常支持：SYSTEM/funct12=`0x001` 触发同步异常 cause 3。
 - 新增 `FENCE/FENCE.I` 合法 no-op 支持，提升编译器生成程序的兼容性。
 - 新增 xv6 主线部分进展：补充真实 S-mode、`SRET`、异常/中断委托和 S 态 trap CSR 写入路径。
+- 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
 - 新增 `test-labplus-2/3/4` 三个 Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
 本次新增通过的核心测试为 atomic extension 和 privileged/PMP sys-test。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
@@ -137,7 +138,21 @@ Lab+ privfull 输出中存在 `Test breakpoint [X]`。反汇编和二进制字�
 - trap 被委托到 S 态时，跳转 `stvec`，写入 `sepc/scause/stval`，并更新 `sstatus.sie/spie/spp`；未委托时保持原 M 态 trap 路径。
 - 增加 S 级中断 evaluate 框架：当 `mip/sip`、`mie/sie`、`mideleg` 同时打开时，U/S 态可进入 S trap。
 
-这一部分还不能直接跑 xv6，因为仍缺少 MMU page fault 上报、PTE 权限完整检查、virtio/磁盘 MMIO 或替代块设备模型。但它把 xv6 所需的 Supervisor trap 基础路径补上了，并通过现有 Lab6 与 Lab+ privfull 回归确认没有破坏原 U/M 行为。
+这一部分还不能直接跑完整 xv6，因为仍缺少 virtio/磁盘 MMIO 或替代块设备模型，以及更完整的 `SUM/MXR` 和 A/D 位硬件更新。但它把 xv6 所需的 Supervisor trap 基础路径补上了，并通过现有 Lab5、Lab6 与 Lab+ privfull 回归确认没有破坏原 U/M 行为。
+
+### 4.7 MMU page fault 与 PTE 权限检查
+
+原 MMU 在页表项无效时会把最终物理地址置 0 并继续发起访存，这对 Lab5 的正常路径足够，但不适合继续做 xv6/异常测试。本次在 CBus 响应中增加 `page_fault` 标记，并把该标记一路传回取指和数据访存路径：
+
+- CBus 请求增加 `is_instr`，MMU 能区分取指、load 读和 store/AMO 写。
+- CBus/IBus/DBus 响应增加 `page_fault`，MMU 发现翻译失败时返回一拍 fault 响应，不再访问物理地址 0。
+- 取指 page fault 进入 decode 统一异常路径，产生 cause 12，`mtval/stval` 写入 faulting virtual address。
+- load/LR/AMO read page fault 在数据响应阶段产生 cause 13。
+- store/SC/AMO write page fault 在数据响应阶段产生 cause 15，并阻止该访存提交到 difftest。
+- MMU 检查 Sv39 canonical 地址、`V=0`、`W=1 && R=0`、第三级仍非叶子、叶子页 `R/W/X/U` 权限和 1 GiB/2 MiB 巨页 PPN 对齐。
+- 为兼容官方 Lab5 kernel，本次不强制 A/D 位。若后续要严格按规范处理，需要实现硬件置 A/D 或让软件 trap 后设置 A/D。
+
+数据侧 page fault 是响应期异常，不在 decode 阶段就能确定。因此本次额外补了 WB trap 重定向：当 `dresp.page_fault=1` 时清除等待中的访存、写入 trap CSR，并清空 IF/ID，防止后续指令越过 faulting load/store 提交。
 
 ## 5. 前端性能优化
 
@@ -208,6 +223,17 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
   - 新增 `EBREAK` 解码和 breakpoint exception cause 3。
   - 新增 `FENCE/FENCE.I` 合法 no-op 解码。
   - 新增 S-mode、`SRET`、`medeleg/mideleg` 委托、S 态 trap CSR 写入。
+  - 新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水。
+- `vsrc/include/common.sv`
+  - 扩展 CBus/IBus/DBus 响应，增加 `page_fault`。
+  - 扩展 CBus 请求，增加 `is_instr` 标记。
+- `vsrc/util/MMU.sv`
+  - 新增 fault 状态和 PTE 权限检查，不再将无效 PTE 转成物理地址 0。
+  - 支持 Sv39 canonical 地址检查和巨页 PPN 对齐检查。
+- `vsrc/util/IBusToCBus.sv`、`vsrc/util/DBusToCBus.sv`
+  - 传递 `is_instr` 与 `page_fault`。
+- `vsrc/mycpu_top.sv`、`vsrc/util/CBusToAXI.sv`、`vivado/src/with_delay/soc_top.sv`
+  - 对真实内存响应源固定 `page_fault=0`。
 - `vsrc/include/csr.sv`
   - 修正 `SSTATUS_MASK`，开放 SIE/SPIE/SPP 等 S 态状态位。
   - 设置 `MEDELEG_MASK/MIDELEG_MASK`，支持常见异常和 S 级中断委托。
@@ -324,12 +350,15 @@ Exit with code = 0
 
 ### 7.7 S-mode/SRET 回归
 
-本次新增 S-mode 与委托路径后重新运行：
+本次新增 S-mode、委托路径、MMU page fault 与 PTE 权限检查后重新运行：
 
 ```text
 make test-labplus-3
 Core 0: HIT GOOD TRAP at pc = 0x800000dc
 instrCnt = 55, cycleCnt = 249
+
+Lab5 kernel:
+Return from init! Test passed
 
 TEST=sys ./build/emu --no-diff -i ./ready-to-run/lab6/lab6-test.bin
 Privileged test finished.
@@ -342,10 +371,11 @@ Exit with code = 0
 
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的第一步：S-mode、`SRET` 和 trap delegation。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的前两步：S-mode/trap delegation，以及 MMU page fault/PTE 基础权限检查。后续如果继续推进 xv6，需要补充：
 
-- MMU page fault 的 cause 12/13/15 上报。
-- PTE `R/W/X/U/A/D` 权限检查和 `SUM/MXR` 影响。
+- PTE A/D 位硬件更新或对应 trap 修复路径。
+- `SUM/MXR` 对 S 态访问用户页、执行页读数据的影响。
+- 更有针对性的 page fault 单元测试，覆盖 instruction/load/store 三种 fault。
 - virtio 或简化磁盘 MMIO，从 `fs.img` 同步读取块数据。
 - S 态 timer/external interrupt 与 CLINT/PLIC 的转换路径。
 - 更完整的 PMP 多 entry 支持。
@@ -355,7 +385,7 @@ Exit with code = 0
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、PMP0/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已先完成 S-mode、`SRET` 和 trap delegation 作为部分进展。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、PMP0/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation，以及 MMU page fault/PTE 基础权限检查。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 

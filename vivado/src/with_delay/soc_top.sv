@@ -2,10 +2,12 @@
 `define __ARCH_VIVADO_CPU_DEPS_SV
 `include "../../../vsrc/include/config.sv"
 `include "../../../vsrc/include/common.sv"
+`include "../../../vsrc/include/csr.sv"
 `include "../../../vsrc/src/core.sv"
 `include "../../../vsrc/util/IBusToCBus.sv"
 `include "../../../vsrc/util/DBusToCBus.sv"
 `include "../../../vsrc/util/CBusArbiter.sv"
+`include "../../../vsrc/util/MMU.sv"
 `endif
 
 module mycpu_top_single
@@ -28,7 +30,11 @@ module mycpu_top_single
 );
 	cbus_req_t  oreq;
 	cbus_resp_t oresp;
+	cbus_req_t  cpu_oreq;
+	cbus_resp_t cpu_oresp;
 	logic trint, swint, exint;
+	logic [1:0] priv_mode;
+	word_t satp;
 
 	ibus_req_t  ireq;
 	ibus_resp_t iresp;
@@ -48,6 +54,8 @@ module mycpu_top_single
 		.iresp(iresp),
 		.dreq(dreq),
 		.dresp(dresp),
+		.priv_mode(priv_mode),
+		.satp(satp),
 		.trint(trint),
 		.swint(swint),
 		.exint(exint)
@@ -72,6 +80,17 @@ module mycpu_top_single
 		.reset(reset),
 		.ireqs({icreq, dcreq}),
 		.iresps({icresp, dcresp}),
+		.oreq(cpu_oreq),
+		.oresp(cpu_oresp)
+	);
+
+	MMU mmu(
+		.clk(clk),
+		.reset(reset),
+		.priv_mode(priv_mode),
+		.satp(satp),
+		.ireq(cpu_oreq),
+		.iresp(cpu_oresp),
 		.oreq(oreq),
 		.oresp(oresp)
 	);
@@ -85,6 +104,8 @@ module mycpu_top_single
 	assign size = oreq.size;
 
 	assign oresp.data = rdata;
+	assign oresp.paddr = oreq.addr;
+	assign oresp.page_fault = 1'b0;
 	assign oresp.ready = ready;
 	assign oresp.last = last;
 endmodule

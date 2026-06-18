@@ -39,7 +39,7 @@ module core import common::*;(
 	addr_t pc, if_req_addr, if_id_pc;
 	logic  if_pending, if_id_valid, if_can_request;
 	u32    if_id_instr;
-	logic  if_id_access_fault;
+	logic  if_id_access_fault, if_id_page_fault;
 	addr_t if_id_fault_tval;
 	logic  id_consume;
 	logic  id_redirect;
@@ -62,6 +62,7 @@ module core import common::*;(
 	logic [7:0] mem_load_optype;
 	logic [4:0] mem_amo_op;
 	word_t mem_atomic_wb_data, mem_atomic_src_data;
+	logic [1:0] mem_priv;
 	logic reservation_valid;
 	addr_t reservation_addr;
 
@@ -98,15 +99,25 @@ module core import common::*;(
 			if_id_pc <= '0;
 			if_id_instr <= '0;
 			if_id_access_fault <= 1'b0;
+			if_id_page_fault <= 1'b0;
 			if_id_fault_tval <= '0;
 		end
 		else begin
-			if (if_can_request) begin
+			if (wb_trap_valid) begin
+				pc <= wb_trap_to_s ? {csr_stvec[63:2], 2'b00} : {csr_mtvec[63:2], 2'b00};
+				if_pending <= 1'b0;
+				if_id_valid <= 1'b0;
+				if_id_access_fault <= 1'b0;
+				if_id_page_fault <= 1'b0;
+				if_id_fault_tval <= '0;
+			end
+			else if (if_can_request) begin
 				if (pmp_access_fault(pc, MSIZE4, 1'b1, 1'b0, fetch_priv)) begin
 					if_id_valid <= 1'b1;
 					if_id_pc <= pc;
 					if_id_instr <= 32'h0000_0013;
 					if_id_access_fault <= 1'b1;
+					if_id_page_fault <= 1'b0;
 					if_id_fault_tval <= pc;
 				end
 				else begin
@@ -117,15 +128,17 @@ module core import common::*;(
 			if (if_pending && iresp.data_ok) begin
 				if_id_valid <= 1'b1;
 				if_id_pc <= if_req_addr;
-				if_id_instr <= iresp.data;
+				if_id_instr <= iresp.page_fault ? 32'h0000_0013 : iresp.data;
 				if_id_access_fault <= 1'b0;
-				if_id_fault_tval <= '0;
+				if_id_page_fault <= iresp.page_fault;
+				if_id_fault_tval <= iresp.page_fault ? if_req_addr : '0;
 				pc <= if_req_addr + 64'd4;
 				if_pending <= 1'b0;
 			end
 			if (if_id_valid && id_consume) begin
 				if_id_valid <= 1'b0;
 				if_id_access_fault <= 1'b0;
+				if_id_page_fault <= 1'b0;
 			end
 			if (if_id_valid && id_consume && id_redirect) begin
 				pc <= id_redirect_target;
@@ -414,7 +427,7 @@ module core import common::*;(
 	logic id_is_lr, id_is_sc, id_sc_success;
 	logic [4:0] id_amo_op;
 	logic id_control_misaligned, id_load_misaligned, id_store_misaligned;
-	logic id_instr_access_fault, id_load_access_fault, id_store_access_fault;
+	logic id_instr_access_fault, id_instr_page_fault, id_load_access_fault, id_store_access_fault;
 	logic id_sync_exception, id_interrupt, id_trap, id_trap_is_interrupt, id_trap_to_s;
 	word_t id_interrupt_cause, id_trap_cause, id_trap_tval;
 
@@ -964,6 +977,7 @@ module core import common::*;(
 	assign id_load_misaligned = id_is_load && addr_misaligned(id_mem_addr, id_mem_size);
 	assign id_store_misaligned = (id_is_store || id_is_amo) && addr_misaligned(id_mem_addr, id_mem_size);
 	assign id_instr_access_fault = id_valid && if_id_access_fault;
+	assign id_instr_page_fault = id_valid && if_id_page_fault;
 	assign id_load_access_fault =
 		(id_is_load || (id_is_amo && !id_is_sc)) &&
 		pmp_access_fault(id_mem_addr, id_mem_size, 1'b0, 1'b0, current_priv);
@@ -1007,7 +1021,7 @@ module core import common::*;(
 
 	always_comb begin
 			id_sync_exception = id_valid &&
-				(id_control_misaligned || id_instr_access_fault || !id_instr_legal ||
+				(id_control_misaligned || id_instr_access_fault || id_instr_page_fault || !id_instr_legal ||
 				 id_load_misaligned || id_load_access_fault || id_store_misaligned ||
 				 id_store_access_fault || id_is_ecall || id_is_ebreak);
 		id_trap_cause = id_interrupt_cause;
@@ -1018,6 +1032,10 @@ module core import common::*;(
 		end
 		else if (id_instr_access_fault) begin
 			id_trap_cause = 64'd1;
+			id_trap_tval = if_id_fault_tval;
+		end
+		else if (id_instr_page_fault) begin
+			id_trap_cause = 64'd12;
 			id_trap_tval = if_id_fault_tval;
 		end
 		else if (!id_instr_legal) begin
@@ -1062,7 +1080,7 @@ module core import common::*;(
 			(id_is_csr ? (if_id_pc + 64'd4) : id_control_target)));
 	assign id_store_mask = make_store_mask(id_mem_size, id_mem_addr[2:0]);
 	assign id_store_data = make_store_data(id_mem_size, id_mem_addr[2:0], rs2_val);
-	assign id_fire = id_valid && !mem_pending;
+	assign id_fire = id_valid && !mem_pending && !wb_trap_valid;
 	assign id_go_mem = id_fire &&
 		(id_is_load || id_is_store || (id_is_amo && !id_is_sc) || (id_is_sc && id_sc_success)) &&
 		!id_trap;
@@ -1109,6 +1127,7 @@ module core import common::*;(
 			mem_amo_op <= '0;
 			mem_atomic_wb_data <= '0;
 			mem_atomic_src_data <= '0;
+			mem_priv <= PRIV_M;
 			reservation_valid <= 1'b0;
 			reservation_addr <= '0;
 			ex_wb_valid <= 1'b0;
@@ -1171,7 +1190,25 @@ module core import common::*;(
 			ex_wb_priv <= current_priv;
 
 			if (mem_pending && dresp.data_ok) begin
-				if (mem_is_atomic && !mem_atomic_write_phase && !mem_atomic_is_lr) begin
+				if (dresp.page_fault) begin
+					logic mem_fault_is_store;
+					mem_fault_is_store = mem_is_store && (!mem_is_atomic || mem_atomic_write_phase);
+					mem_pending <= 1'b0;
+					mem_is_load <= 1'b0;
+					mem_is_store <= 1'b0;
+					mem_is_atomic <= 1'b0;
+					mem_atomic_write_phase <= 1'b0;
+					mem_atomic_is_lr <= 1'b0;
+					mem_atomic_is_sc <= 1'b0;
+					mem_wen <= 1'b0;
+					ex_wb_trap_valid <= 1'b1;
+					ex_wb_trap_is_interrupt <= 1'b0;
+					ex_wb_trap_cause <= mem_fault_is_store ? 64'd15 : 64'd13;
+					ex_wb_trap_tval <= mem_addr;
+					ex_wb_trap_pc <= mem_pc;
+					ex_wb_priv <= mem_priv;
+				end
+				else if (mem_is_atomic && !mem_atomic_write_phase && !mem_atomic_is_lr) begin
 					logic [31:0] old_word, new_word;
 					old_word = select_word(dresp.data, mem_addr[2:0]);
 					new_word = amo_w_result(mem_amo_op, old_word, mem_wdata[31:0]);
@@ -1239,6 +1276,7 @@ module core import common::*;(
 				mem_amo_op <= id_amo_op;
 				mem_atomic_wb_data <= id_is_sc ? 64'd0 : 64'd0;
 				mem_atomic_src_data <= rs2_val;
+				mem_priv <= current_priv;
 			end
 			else if (id_fire) begin
 				ex_wb_valid <= !id_trap || id_is_ecall;

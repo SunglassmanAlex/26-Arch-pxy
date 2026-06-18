@@ -11,7 +11,9 @@
  */
 
 module DBusToCBus
-    import common::*;(
+    import common::*;#(
+    parameter logic IS_INSTR = 1'b0
+) (
     input  dbus_req_t  dreq,
     output dbus_resp_t dresp,
     output cbus_req_t  dcreq,
@@ -19,6 +21,7 @@ module DBusToCBus
 );
     assign dcreq.valid    =  dreq.valid;
     assign dcreq.is_write = |dreq.strobe;
+    assign dcreq.is_instr =  IS_INSTR;
     assign dcreq.size     =  dreq.size;
     assign dcreq.addr     =  dreq.addr;
     assign dcreq.strobe   =  dreq.strobe;
@@ -33,6 +36,7 @@ module DBusToCBus
     assign dresp.data_ok = okay;
     assign dresp.data    = dcresp.data;
     assign dresp.paddr   = dcresp.paddr;
+    assign dresp.page_fault = dcresp.page_fault;
 endmodule
 
 

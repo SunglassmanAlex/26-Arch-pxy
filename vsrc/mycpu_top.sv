@@ -34,6 +34,7 @@ module mycpu_top
   assign wdata = oreq.data;
   assign oresp.data = rdata;
   assign oresp.paddr = oreq.addr;
+  assign oresp.page_fault = 1'b0;
   assign wstrobe = oreq.strobe;
   assign burst = oreq.burst;
   assign len = oreq.len;

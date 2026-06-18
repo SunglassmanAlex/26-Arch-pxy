@@ -91,12 +91,14 @@ module SimpleArbiter
 		assign rresp[i].addr_ok = 1'b1;
 		assign rresp[i].data = dresp[i].data;
 		assign rresp[i].paddr = dresp[i].paddr;
+		assign rresp[i].page_fault = dresp[i].page_fault;
 	end
 
 	for (genvar i = 0; i < WMEM_WIDTH; i++) begin
 		assign wresp[i].addr_ok = 1'b1;
 		assign wresp[i].data = 'x;
 		assign wresp[i].paddr = dresp[i].paddr;
+		assign wresp[i].page_fault = dresp[i].page_fault;
 		
 	end	
 	
