@@ -13,6 +13,7 @@ module core import common::*;(
 	input  dbus_resp_t dresp,
 	output logic [1:0] priv_mode,
 	output word_t      satp,
+	output word_t      mstatus,
 	input  logic       trint, swint, exint
 );
 	import csr_pkg::*;
@@ -76,6 +77,7 @@ module core import common::*;(
 
 	assign priv_mode = current_priv;
 	assign satp = csr_satp;
+	assign mstatus = csr_mstatus;
 	assign mip_value = (csr_mip & ~MIP_HW_MASK) |
 		(swint ? MIP_MSIP_BIT : 64'd0) |
 		(trint ? MIP_MTIP_BIT : 64'd0) |

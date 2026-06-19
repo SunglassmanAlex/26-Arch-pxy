@@ -12,6 +12,7 @@ module MMU
     input  logic      reset,
     input  logic [1:0] priv_mode,
     input  word_t     satp,
+    input  word_t     mstatus,
 
     input  cbus_req_t  ireq,
     output cbus_resp_t iresp,
@@ -23,6 +24,8 @@ module MMU
     localparam logic [1:0] PRIV_M = 2'b11;
     localparam logic [3:0] SATP_MODE_BARE = 4'd0;
     localparam logic [3:0] SATP_MODE_SV39 = 4'd8;
+    localparam word_t MSTATUS_SUM_BIT = 64'h0000_0000_0004_0000;
+    localparam word_t MSTATUS_MXR_BIT = 64'h0000_0000_0008_0000;
 
     typedef enum logic [1:0] {
         S_IDLE,
@@ -72,12 +75,19 @@ module MMU
         endcase
     endfunction
 
-    function automatic logic pte_perm_fault(input word_t pte, input cbus_req_t req, input logic [1:0] mode);
-        logic pte_r, pte_w, pte_x, pte_u;
+    function automatic logic pte_perm_fault(
+        input word_t pte,
+        input cbus_req_t req,
+        input logic [1:0] mode,
+        input word_t status
+    );
+        logic pte_r, pte_w, pte_x, pte_u, sum, mxr;
         pte_r = pte[1];
         pte_w = pte[2];
         pte_x = pte[3];
         pte_u = pte[4];
+        sum = |(status & MSTATUS_SUM_BIT);
+        mxr = |(status & MSTATUS_MXR_BIT);
 
         pte_perm_fault = 1'b0;
         if (req.is_instr) begin
@@ -87,11 +97,11 @@ module MMU
             pte_perm_fault = !pte_w;
         end
         else begin
-            pte_perm_fault = !pte_r;
+            pte_perm_fault = !(pte_r || (mxr && pte_x));
         end
 
         if ((mode == PRIV_U) && !pte_u) pte_perm_fault = 1'b1;
-        if ((mode == PRIV_S) && pte_u) pte_perm_fault = 1'b1;
+        if ((mode == PRIV_S) && pte_u && (req.is_instr || !sum)) pte_perm_fault = 1'b1;
     endfunction
 
     function automatic addr_t translated_addr(input word_t pte, input addr_t va, input logic [1:0] lvl);
@@ -176,7 +186,7 @@ module MMU
                             end
                         end
                         else if (superpage_misaligned(oresp.data, level) ||
-                            pte_perm_fault(oresp.data, saved_req, priv_mode)) begin
+                            pte_perm_fault(oresp.data, saved_req, priv_mode, mstatus)) begin
                             state <= S_FAULT;
                         end
                         else begin

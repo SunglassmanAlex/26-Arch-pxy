@@ -29,7 +29,7 @@ module VTop
     cbus_req_t  cpu_oreq;
     cbus_resp_t cpu_oresp;
     logic [1:0] priv_mode;
-    word_t satp;
+    word_t satp, mstatus;
 
     core core(.*);
     IBusToCBus icvt(.*);
@@ -51,6 +51,7 @@ module VTop
         .reset(reset),
         .priv_mode(priv_mode),
         .satp(satp),
+        .mstatus(mstatus),
         .ireq(cpu_oreq),
         .iresp(cpu_oresp),
         .oreq(oreq),

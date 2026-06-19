@@ -27,7 +27,7 @@ module SimTop import common::*;(
     /* verilator lint_on UNOPTFLAT */
     logic trint, swint, exint;
     logic [1:0] priv_mode;
-    word_t satp;
+    word_t satp, mstatus;
 
     ibus_req_t  ireq;
     ibus_resp_t iresp;
@@ -38,7 +38,7 @@ module SimTop import common::*;(
 
     core core(
       .clk(clock), .reset, .ireq, .iresp, .dreq, .dresp,
-      .priv_mode(priv_mode), .satp(satp),
+      .priv_mode(priv_mode), .satp(satp), .mstatus(mstatus),
       .trint, .swint, .exint
     );
 
@@ -56,6 +56,7 @@ module SimTop import common::*;(
         .clk(clock), .reset,
         .priv_mode(priv_mode),
         .satp(satp),
+        .mstatus(mstatus),
         .ireq(cpu_oreq),
         .iresp(cpu_oresp),
         .oreq(oreq),

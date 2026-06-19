@@ -34,7 +34,7 @@ module mycpu_top_single
 	cbus_resp_t cpu_oresp;
 	logic trint, swint, exint;
 	logic [1:0] priv_mode;
-	word_t satp;
+	word_t satp, mstatus;
 
 	ibus_req_t  ireq;
 	ibus_resp_t iresp;
@@ -56,6 +56,7 @@ module mycpu_top_single
 		.dresp(dresp),
 		.priv_mode(priv_mode),
 		.satp(satp),
+		.mstatus(mstatus),
 		.trint(trint),
 		.swint(swint),
 		.exint(exint)
@@ -89,6 +90,7 @@ module mycpu_top_single
 		.reset(reset),
 		.priv_mode(priv_mode),
 		.satp(satp),
+		.mstatus(mstatus),
 		.ireq(cpu_oreq),
 		.iresp(cpu_oresp),
 		.oreq(oreq),
