@@ -27,16 +27,18 @@ module MMU
     localparam word_t MSTATUS_SUM_BIT = 64'h0000_0000_0004_0000;
     localparam word_t MSTATUS_MXR_BIT = 64'h0000_0000_0008_0000;
 
-    typedef enum logic [1:0] {
+    typedef enum logic [2:0] {
         S_IDLE,
         S_WALK,
+        S_AD_UPDATE,
         S_FINAL,
         S_FAULT
     } state_t;
 
     state_t state;
     cbus_req_t saved_req;
-    addr_t walk_addr, final_paddr;
+    addr_t walk_addr, final_paddr, pte_update_addr;
+    word_t pte_update_data;
     logic [1:0] level;
 
     function automatic logic mmu_enabled(input logic [1:0] mode, input word_t satp_val);
@@ -65,6 +67,15 @@ module MMU
 
     function automatic logic pte_invalid(input word_t pte);
         pte_invalid = !pte[0] || (pte[2] && !pte[1]);
+    endfunction
+
+    function automatic logic pte_ad_update_needed(input word_t pte, input cbus_req_t req);
+        pte_ad_update_needed = !pte[6] || (req.is_write && !pte[7]);
+    endfunction
+
+    function automatic word_t pte_with_ad(input word_t pte, input cbus_req_t req);
+        pte_with_ad = pte | 64'h0000_0000_0000_0040 |
+            (req.is_write ? 64'h0000_0000_0000_0080 : 64'd0);
     endfunction
 
     function automatic logic superpage_misaligned(input word_t pte, input logic [1:0] lvl);
@@ -132,6 +143,17 @@ module MMU
             oreq.len = MLEN1;
             oreq.burst = AXI_BURST_FIXED;
         end
+        else if (state == S_AD_UPDATE) begin
+            oreq.valid = 1'b1;
+            oreq.is_write = 1'b1;
+            oreq.is_instr = 1'b0;
+            oreq.size = MSIZE8;
+            oreq.addr = pte_update_addr;
+            oreq.strobe = 8'hff;
+            oreq.data = pte_update_data;
+            oreq.len = MLEN1;
+            oreq.burst = AXI_BURST_FIXED;
+        end
         else if (state == S_FINAL) begin
             oreq = saved_req;
             oreq.addr = final_paddr;
@@ -153,6 +175,8 @@ module MMU
             saved_req <= '0;
             walk_addr <= '0;
             final_paddr <= '0;
+            pte_update_addr <= '0;
+            pte_update_data <= '0;
             level <= '0;
         end
         else begin
@@ -191,8 +215,21 @@ module MMU
                         end
                         else begin
                             final_paddr <= translated_addr(oresp.data, saved_req.addr, level);
-                            state <= S_FINAL;
+                            if (pte_ad_update_needed(oresp.data, saved_req)) begin
+                                pte_update_addr <= walk_addr;
+                                pte_update_data <= pte_with_ad(oresp.data, saved_req);
+                                state <= S_AD_UPDATE;
+                            end
+                            else begin
+                                state <= S_FINAL;
+                            end
                         end
+                    end
+                end
+
+                S_AD_UPDATE: begin
+                    if (oresp.last) begin
+                        state <= S_FINAL;
                     end
                 end
 

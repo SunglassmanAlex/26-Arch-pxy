@@ -23,6 +23,7 @@
 - 新增 xv6 主线部分进展：补充真实 S-mode、`SRET`、异常/中断委托和 S 态 trap CSR 写入路径。
 - 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
 - 新增 `SUM/MXR` 支持：`MXR` 允许 load 读取 execute-only 页，`SUM` 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
+- 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
 - 新增 `test-labplus-2/3/4` 三个 Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
 本次新增通过的核心测试为 atomic extension 和 privileged/PMP sys-test。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
@@ -141,7 +142,7 @@ Lab+ privfull 输出中存在 `Test breakpoint [X]`。反汇编和二进制字�
 - trap 被委托到 S 态时，跳转 `stvec`，写入 `sepc/scause/stval`，并更新 `sstatus.sie/spie/spp`；未委托时保持原 M 态 trap 路径。
 - 增加 S 级中断 evaluate 框架：当 `mip/sip`、`mie/sie`、`mideleg` 同时打开时，U/S 态可进入 S trap。
 
-这一部分还不能直接跑完整 xv6，因为仍缺少 virtio/磁盘 MMIO 或替代块设备模型，以及 A/D 位硬件更新。但它把 xv6 所需的 Supervisor trap 基础路径补上了，并通过现有 Lab5、Lab6 与 Lab+ privfull 回归确认没有破坏原 U/M 行为。
+这一部分还不能直接跑完整 xv6，因为仍缺少 virtio/磁盘 MMIO 或替代块设备模型。但它把 xv6 所需的 Supervisor trap 基础路径补上了，并通过现有 Lab5、Lab6 与 Lab+ privfull 回归确认没有破坏原 U/M 行为。
 
 ### 4.7 MMU page fault 与 PTE 权限检查
 
@@ -153,11 +154,22 @@ Lab+ privfull 输出中存在 `Test breakpoint [X]`。反汇编和二进制字�
 - load/LR/AMO read page fault 在数据响应阶段产生 cause 13。
 - store/SC/AMO write page fault 在数据响应阶段产生 cause 15，并阻止该访存提交到 difftest。
 - MMU 检查 Sv39 canonical 地址、`V=0`、`W=1 && R=0`、第三级仍非叶子、叶子页 `R/W/X/U` 权限和 1 GiB/2 MiB 巨页 PPN 对齐。
-- 为兼容官方 Lab5 kernel，本次不强制 A/D 位。若后续要严格按规范处理，需要实现硬件置 A/D 或让软件 trap 后设置 A/D。
 
 数据侧 page fault 是响应期异常，不在 decode 阶段就能确定。因此本次额外补了 WB trap 重定向：当 `dresp.page_fault=1` 时清除等待中的访存、写入 trap CSR，并清空 IF/ID，防止后续指令越过 faulting load/store 提交。
 
-### 4.8 `SUM/MXR` 权限补充
+### 4.8 PTE A/D 位硬件更新
+
+RISC-V Sv39 的叶子 PTE 中，`A` 表示 accessed，`D` 表示 dirty。为了让不预先置 A/D 的页表也可以运行，本次在 MMU 页表 walker 中加入硬件更新路径：
+
+- 叶子 PTE 权限检查通过后，如果 `A=0`，MMU 对该 PTE 地址写回 `A=1`。
+- 对 store/SC/AMO write，如果 `D=0`，同一次写回同时置 `D=1`。
+- instruction fetch 和 load 只需要置 `A`，不置 `D`。
+- PTE 写回完成后，MMU 再发起原本的最终物理地址访问。
+- 非法 PTE、权限不足、superpage PPN 未对齐等 fault 不会更新 A/D 位。
+
+实现上新增 `S_AD_UPDATE` 状态，复用已有 CBus 对页表项地址发起 64 位写事务；外部 MMU 接口保持不变。
+
+### 4.9 `SUM/MXR` 权限补充
 
 在 `MMU` 中继续补充了 `mstatus.sum` 和 `mstatus.mxr` 对页表权限的影响：
 
@@ -248,6 +260,7 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
   - 新增 fault 状态和 PTE 权限检查，不再将无效 PTE 转成物理地址 0。
   - 支持 Sv39 canonical 地址检查和巨页 PPN 对齐检查。
   - 支持 `SUM/MXR` 对 S/U 态数据访问和 execute-only 页读取的影响。
+  - 新增 `S_AD_UPDATE` 状态，支持硬件置 PTE `A/D` 位。
 - `vsrc/util/IBusToCBus.sv`、`vsrc/util/DBusToCBus.sv`
   - 传递 `is_instr` 与 `page_fault`。
 - `vsrc/mycpu_top.sv`、`vsrc/util/CBusToAXI.sv`、`vivado/src/with_delay/soc_top.sv`
@@ -369,7 +382,7 @@ Exit with code = 0
 
 ### 7.7 S-mode/SRET 回归
 
-本次新增 S-mode、委托路径、MMU page fault、PTE 权限检查、`SUM/MXR` 与 8-entry PMP 后重新运行：
+本次新增 S-mode、委托路径、MMU page fault、PTE 权限检查、`SUM/MXR`、PTE A/D 硬件更新与 8-entry PMP 后重新运行：
 
 ```text
 make test-labplus-3
@@ -392,7 +405,6 @@ Exit with code = 0
 
 本次已经完成 xv6 主线的前两步：S-mode/trap delegation，以及 MMU page fault/PTE 基础权限检查。后续如果继续推进 xv6，需要补充：
 
-- PTE A/D 位硬件更新或对应 trap 修复路径。
 - 更有针对性的 page fault 单元测试，覆盖 instruction/load/store 三种 fault。
 - virtio 或简化磁盘 MMIO，从 `fs.img` 同步读取块数据。
 - S 态 timer/external interrupt 与 CLINT/PLIC 的转换路径。
@@ -402,7 +414,7 @@ Exit with code = 0
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、MMU page fault/PTE 基础权限检查，以及 `SUM/MXR` 权限补充。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充，以及 PTE A/D 位硬件更新。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 

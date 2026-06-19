@@ -31,6 +31,7 @@
   \item 新增 xv6 主线部分进展：补充真实 S-mode、\texttt{SRET}、异常/中断委托和 S 态 trap CSR 写入路径。
   \item 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
   \item 新增 \texttt{SUM/MXR} 支持：\texttt{MXR} 允许 load 读取 execute-only 页，\texttt{SUM} 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
+  \item 新增 PTE A/D 位硬件更新：叶子 PTE 的 \texttt{A=0} 或写访问 \texttt{D=0} 时，MMU 先写回更新后的 PTE，再继续最终访存。
   \item 新增 \texttt{test-labplus-2/3/4} 三个 Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 \end{itemize}
 
@@ -135,7 +136,7 @@ Lab+ privfull 输出中存在 \texttt{Test breakpoint [X]}。反汇编和二进�
   \item 增加 S 级中断 evaluate 框架：当 \texttt{mip/sip}、\texttt{mie/sie}、\texttt{mideleg} 同时打开时，U/S 态可进入 S trap。
 \end{itemize}
 
-这一部分还不能直接跑完整 xv6，因为仍缺少 virtio/磁盘 MMIO 或替代块设备模型，以及 A/D 位硬件更新。但它把 xv6 所需的 Supervisor trap 基础路径补上了，并通过现有 Lab5、Lab6 与 Lab+ privfull 回归确认没有破坏原 U/M 行为。
+这一部分还不能直接跑完整 xv6，因为仍缺少 virtio/磁盘 MMIO 或替代块设备模型。但它把 xv6 所需的 Supervisor trap 基础路径补上了，并通过现有 Lab5、Lab6 与 Lab+ privfull 回归确认没有破坏原 U/M 行为。
 
 \subsection{MMU page fault 与 PTE 权限检查}
 
@@ -148,10 +149,23 @@ Lab+ privfull 输出中存在 \texttt{Test breakpoint [X]}。反汇编和二进�
   \item load/LR/AMO read page fault 在数据响应阶段产生 cause 13。
   \item store/SC/AMO write page fault 在数据响应阶段产生 cause 15，并阻止该访存提交到 difftest。
   \item MMU 检查 Sv39 canonical 地址、\texttt{V=0}、\texttt{W=1 \&\& R=0}、第三级仍非叶子、叶子页 \texttt{R/W/X/U} 权限和 1 GiB/2 MiB 巨页 PPN 对齐。
-  \item 为兼容官方 Lab5 kernel，本次不强制 A/D 位。若后续要严格按规范处理，需要实现硬件置 A/D 或让软件 trap 后设置 A/D。
 \end{itemize}
 
 数据侧 page fault 是响应期异常，不在 decode 阶段就能确定。因此本次额外补了 WB trap 重定向：当 \texttt{dresp.page\_fault=1} 时清除等待中的访存、写入 trap CSR，并清空 IF/ID，防止后续指令越过 faulting load/store 提交。
+
+\subsection{PTE A/D 位硬件更新}
+
+RISC-V Sv39 的叶子 PTE 中，\texttt{A} 表示 accessed，\texttt{D} 表示 dirty。为了让不预先置 A/D 的页表也可以运行，本次在 MMU 页表 walker 中加入硬件更新路径：
+
+\begin{itemize}
+  \item 叶子 PTE 权限检查通过后，如果 \texttt{A=0}，MMU 对该 PTE 地址写回 \texttt{A=1}。
+  \item 对 store/SC/AMO write，如果 \texttt{D=0}，同一次写回同时置 \texttt{D=1}。
+  \item instruction fetch 和 load 只需要置 \texttt{A}，不置 \texttt{D}。
+  \item PTE 写回完成后，MMU 再发起原本的最终物理地址访问。
+  \item 非法 PTE、权限不足、superpage PPN 未对齐等 fault 不会更新 A/D 位。
+\end{itemize}
+
+实现上新增 \texttt{S\_AD\_UPDATE} 状态，复用已有 CBus 对页表项地址发起 64 位写事务；外部 MMU 接口保持不变。
 
 \subsection{\texttt{SUM/MXR} 权限补充}
 
@@ -218,7 +232,7 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
 \begin{itemize}
   \item \texttt{vsrc/src/core.sv}：新增 AMO 解码、AMO 结果计算、reservation 记录；扩展访存状态机；新增 difftest atomic event；新增 \texttt{if\_can\_request}；新增 8-entry PMP 匹配、取指 access fault 注入、load/store access fault；新增 \texttt{fetch\_priv}；新增 \texttt{EBREAK} 解码和 breakpoint exception cause 3；新增 \texttt{FENCE/FENCE.I} 合法 no-op 解码；新增 S-mode、\texttt{SRET}、\texttt{medeleg/mideleg} 委托、S 态 trap CSR 写入；新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水；输出当前 \texttt{mstatus} 给 MMU 使用。
   \item \texttt{vsrc/include/common.sv}：扩展 CBus/IBus/DBus 响应，增加 \texttt{page\_fault}；扩展 CBus 请求，增加 \texttt{is\_instr} 标记。
-  \item \texttt{vsrc/util/MMU.sv}：新增 fault 状态和 PTE 权限检查，不再将无效 PTE 转成物理地址 0；支持 Sv39 canonical 地址检查和巨页 PPN 对齐检查；支持 \texttt{SUM/MXR} 对 S/U 态数据访问和 execute-only 页读取的影响。
+  \item \texttt{vsrc/util/MMU.sv}：新增 fault 状态和 PTE 权限检查，不再将无效 PTE 转成物理地址 0；支持 Sv39 canonical 地址检查和巨页 PPN 对齐检查；支持 \texttt{SUM/MXR} 对 S/U 态数据访问和 execute-only 页读取的影响；新增 \texttt{S\_AD\_UPDATE} 状态，支持硬件置 PTE \texttt{A/D} 位。
   \item \texttt{vsrc/util/IBusToCBus.sv}、\texttt{vsrc/util/DBusToCBus.sv}：传递 \texttt{is\_instr} 与 \texttt{page\_fault}。
   \item \texttt{vsrc/mycpu\_top.sv}、\texttt{vsrc/util/CBusToAXI.sv}、\texttt{vivado/src/with\_delay/soc\_top.sv}：对真实内存响应源固定 \texttt{page\_fault=0}。
   \item \texttt{vsrc/include/csr.sv}：修正 \texttt{SSTATUS\_MASK}，开放 SIE/SPIE/SPP 等 S 态状态位；设置 \texttt{MEDELEG\_MASK/MIDELEG\_MASK}，支持常见异常和 S 级中断委托；新增 \texttt{pmpaddr1} 到 \texttt{pmpaddr7} CSR 地址常量。
@@ -292,7 +306,7 @@ Exit with code = 0
 
 \subsection{S-mode/SRET 回归}
 
-本次新增 S-mode、委托路径、MMU page fault、PTE 权限检查、\texttt{SUM/MXR} 与 8-entry PMP 后重新运行：
+本次新增 S-mode、委托路径、MMU page fault、PTE 权限检查、\texttt{SUM/MXR}、PTE A/D 硬件更新与 8-entry PMP 后重新运行：
 
 \begin{Verbatim}[fontsize=\small]
 make test-labplus-3
@@ -313,13 +327,13 @@ Exit with code = 0
 
 \section{后续可做项}
 
-本次已经完成 xv6 主线的前两步：S-mode/trap delegation，以及 MMU page fault/PTE 基础权限检查。后续如果继续推进 xv6，需要补充 PTE A/D 位硬件更新或对应 trap 修复路径、更有针对性的 page fault 单元测试、virtio 或简化磁盘 MMIO、S 态 timer/external interrupt 与 CLINT/PLIC 的转换路径。
+本次已经完成 xv6 主线的前两步：S-mode/trap delegation，以及 MMU page fault/PTE 基础权限检查。后续如果继续推进 xv6，需要补充更有针对性的 page fault 单元测试、virtio 或简化磁盘 MMIO、S 态 timer/external interrupt 与 CLINT/PLIC 的转换路径。
 
 性能方向还可以继续实现 cache、分支预测或多级流水线，用于进一步提升 \texttt{test-labplus-2}。这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 8-entry PMP、atomic 和前端空泡优化，因此本次没有继续扩大范围。
 
 \section{总结}
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I} 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、MMU page fault/PTE 基础权限检查，以及 \texttt{SUM/MXR} 权限补充。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I} 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、MMU page fault/PTE 基础权限检查、\texttt{SUM/MXR} 权限补充，以及 PTE A/D 位硬件更新。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 \section{AI 使用说明}
 
