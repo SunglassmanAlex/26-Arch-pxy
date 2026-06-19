@@ -35,6 +35,7 @@ module core import common::*;(
 	localparam word_t MIP_MTIP_BIT     = 64'h0000_0000_0000_0080;
 	localparam word_t MIP_SEIP_BIT     = 64'h0000_0000_0000_0200;
 	localparam word_t MIP_MEIP_BIT     = 64'h0000_0000_0000_0800;
+	localparam word_t MIP_S_MASK       = MIP_SSIP_BIT | MIP_STIP_BIT | MIP_SEIP_BIT;
 	localparam word_t MIP_HW_MASK      = MIP_MSIP_BIT | MIP_MTIP_BIT | MIP_MEIP_BIT;
 	localparam int PMP_ENTRIES = 8;
 
@@ -83,7 +84,10 @@ module core import common::*;(
 	assign mip_value = (csr_mip & ~MIP_HW_MASK) |
 		(swint ? MIP_MSIP_BIT : 64'd0) |
 		(trint ? MIP_MTIP_BIT : 64'd0) |
-		(exint ? MIP_MEIP_BIT : 64'd0);
+		(exint ? MIP_MEIP_BIT : 64'd0) |
+		((swint && csr_mideleg[1]) ? MIP_SSIP_BIT : 64'd0) |
+		((trint && csr_mideleg[5]) ? MIP_STIP_BIT : 64'd0) |
+		((exint && csr_mideleg[9]) ? MIP_SEIP_BIT : 64'd0);
 
 	assign ireq.valid = if_pending;
 	assign ireq.addr  = if_req_addr;
@@ -278,9 +282,9 @@ module core import common::*;(
 			CSR_MTVEC:    csr_read = csr_mtvec;
 			CSR_STVEC:    csr_read = csr_stvec;
 			CSR_MIP:      csr_read = mip_value & MIP_MASK;
-			CSR_SIP:      csr_read = mip_value & 64'h222;
+			CSR_SIP:      csr_read = mip_value & MIP_S_MASK;
 			CSR_MIE:      csr_read = csr_mie;
-			CSR_SIE:      csr_read = csr_mie & 64'h222;
+			CSR_SIE:      csr_read = csr_mie & MIP_S_MASK;
 			CSR_MSCRATCH: csr_read = csr_mscratch;
 			CSR_SSCRATCH: csr_read = csr_sscratch;
 			CSR_MEPC:     csr_read = csr_mepc;
@@ -1486,9 +1490,9 @@ module core import common::*;(
 					CSR_MTVEC:    csr_mtvec <= wb_csr_wdata & MTVEC_MASK;
 					CSR_STVEC:    csr_stvec <= wb_csr_wdata & MTVEC_MASK;
 					CSR_MIP:      csr_mip <= wb_csr_wdata & MIP_MASK;
-					CSR_SIP:      csr_mip <= (csr_mip & ~64'h222) | (wb_csr_wdata & 64'h222);
+					CSR_SIP:      csr_mip <= (csr_mip & ~MIP_S_MASK) | (wb_csr_wdata & MIP_S_MASK);
 					CSR_MIE:      csr_mie <= wb_csr_wdata;
-					CSR_SIE:      csr_mie <= (csr_mie & ~64'h222) | (wb_csr_wdata & 64'h222);
+					CSR_SIE:      csr_mie <= (csr_mie & ~MIP_S_MASK) | (wb_csr_wdata & MIP_S_MASK);
 					CSR_MSCRATCH: csr_mscratch <= wb_csr_wdata;
 					CSR_SSCRATCH: csr_sscratch <= wb_csr_wdata;
 					CSR_MEPC:     csr_mepc <= wb_csr_wdata;

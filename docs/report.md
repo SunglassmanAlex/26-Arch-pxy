@@ -21,13 +21,15 @@
 - 新增 `EBREAK` 断点异常支持：SYSTEM/funct12=`0x001` 触发同步异常 cause 3。
 - 新增 `FENCE/FENCE.I` 合法 no-op 支持，提升编译器生成程序的兼容性。
 - 新增 xv6 主线部分进展：补充真实 S-mode、`SRET`、异常/中断委托和 S 态 trap CSR 写入路径。
+- 新增 S 态中断 pending 委托转换：当 `mideleg` 委托 SSIP/STIP/SEIP 时，将 `swint/trint/exint` 映射到对应 S pending 位。
 - 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
 - 新增 `SUM/MXR` 支持：`MXR` 允许 load 读取 execute-only 页，`SUM` 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
 - 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
-- 新增 `test-labplus-2/3/4` 与 `test-labplus-pagefault` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault` 与 `test-labplus-sinterrupt` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
-本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test 和 MMU page fault 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试和 S 态中断定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 ## 3. Atomic Extension 设计
 
@@ -142,6 +144,7 @@ Lab+ privfull 输出中存在 `Test breakpoint [X]`。反汇编和二进制字�
 - 开放 `medeleg` 常见可委托异常位，开放 `mideleg` 的 SSIP/STIP/SEIP 位。
 - trap 被委托到 S 态时，跳转 `stvec`，写入 `sepc/scause/stval`，并更新 `sstatus.sie/spie/spp`；未委托时保持原 M 态 trap 路径。
 - 增加 S 级中断 evaluate 框架：当 `mip/sip`、`mie/sie`、`mideleg` 同时打开时，U/S 态可进入 S trap。
+- 增加简化的 CLINT/PLIC 到 S pending 转换：当 `mideleg.SSIP/STIP/SEIP` 对应位打开时，将外部输入 `swint/trint/exint` 同步镜像到 `mip.SSIP/STIP/SEIP`，使 S 态只打开 `sie` 对应位即可接收 supervisor software/timer/external interrupt。
 
 这一部分还不能直接跑完整 xv6，因为仍缺少 virtio/磁盘 MMIO 或替代块设备模型。但它把 xv6 所需的 Supervisor trap 基础路径补上了，并通过现有 Lab5、Lab6 与 Lab+ privfull 回归确认没有破坏原 U/M 行为。
 
@@ -252,6 +255,7 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
   - 新增 `EBREAK` 解码和 breakpoint exception cause 3。
   - 新增 `FENCE/FENCE.I` 合法 no-op 解码。
   - 新增 S-mode、`SRET`、`medeleg/mideleg` 委托、S 态 trap CSR 写入。
+  - 新增委托后的 `SSIP/STIP/SEIP` pending 镜像，支持 `swint/trint/exint` 进入 S trap。
   - 新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水。
   - 输出当前 `mstatus` 给 MMU 使用。
 - `vsrc/include/common.sv`
@@ -276,8 +280,13 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
 - `vsrc/test/mmu_page_fault_tb.sv`
   - 新增独立 Verilator testbench，直接实例化 `MMU`。
   - 构造固定三层 Sv39 页表，验证 instruction/load/store page fault 与正常 load 翻译。
+- `vsrc/test/s_interrupt_pending_tb.sv`
+  - 新增独立 core 级 Verilator testbench，用手写 CSR 指令初始化委托和 S 态中断使能。
+  - 验证 `trint` 在 `mideleg.STIP=1`、`mie.STIE=1`、`mstatus.SIE=1` 后进入 S trap，`scause` 为 interrupt cause 5。
+- `vsrc/test/difftest_stubs.sv`
+  - 为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4` 和 `test-labplus-pagefault`。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault` 和 `test-labplus-sinterrupt`。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -425,19 +434,36 @@ MMU page fault directed tests passed.
 
 该测试不依赖完整 CPU 或外部镜像，而是直接实例化 `MMU`，用一个简单的同步 CBus 内存模型返回三层 Sv39 页表项。前三个用例分别把叶子 PTE 配成取指不可执行、load execute-only 且 `MXR=0`、store 不可写，确认 `page_fault=1`；最后一个用例使用合法可读页，确认翻译到 `0x4000` 且不产生 fault。
 
+### 7.9 S-mode interrupt 定向测试
+
+运行：
+
+```bash
+make test-labplus-sinterrupt
+```
+
+关键输出：
+
+```text
+s_timer_interrupt [OK]
+S-mode interrupt pending delegation test passed.
+```
+
+该测试直接实例化 `core`，手写最小指令流：M 态设置 `mideleg=0x222`、`mie.STIE=1`、`stvec=0x80`、`mepc=0x40`、`mstatus.MPP=S/SIE=1`，随后执行 `mret`。测试保持 `trint=1`，确认 CPU 返回 S 态后进入 S trap，并检查 `scause=0x8000000000000005`、`sepc=0x40`，从而覆盖 `trint -> STIP -> S-mode timer interrupt` 的转换路径。
+
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的前两步：S-mode/trap delegation，以及 MMU page fault/PTE 基础权限检查，并补了独立 page fault 定向测试。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的前三步：S-mode/trap delegation、S 态中断 pending 委托转换，以及 MMU page fault/PTE 基础权限检查，并补了独立 page fault 和 S interrupt 定向测试。后续如果继续推进 xv6，需要补充：
 
 - virtio 或简化磁盘 MMIO，从 `fs.img` 同步读取块数据。
-- S 态 timer/external interrupt 与 CLINT/PLIC 的转换路径。
+- 更完整的 PLIC claim/complete、优先级和 enable/pending 寄存器模型。
 - cache、分支预测或多级流水线，用于进一步提升 `test-labplus-2` 性能。
 
 这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 8-entry PMP、atomic 和前端空泡优化，因此本次没有继续扩大范围。
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新，以及独立 MMU page fault 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新，以及独立 MMU page fault 与 S interrupt 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 

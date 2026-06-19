@@ -14,6 +14,7 @@ no_arguments:
 	@echo "  - test-labplus-3: Run Lab+ atomic extension test"
 	@echo "  - test-labplus-4: Run Lab+ PMP test"
 	@echo "  - test-labplus-pagefault: Run Lab+ directed MMU page-fault test"
+	@echo "  - test-labplus-sinterrupt: Run Lab+ directed S-mode interrupt test"
 
 init:
 	git submodule update --init --recursive
@@ -86,6 +87,14 @@ test-labplus-pagefault:
 	  -Mdir build/mmu-page-fault -o mmu_page_fault_tb \
 	  vsrc/test/mmu_page_fault_tb.sv vsrc/util/MMU.sv
 	./build/mmu-page-fault/mmu_page_fault_tb
+
+test-labplus-sinterrupt:
+	rm -rf build/s-interrupt
+	verilator --binary --timing --top-module s_interrupt_pending_tb \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/s-interrupt -o s_interrupt_pending_tb \
+	  vsrc/test/difftest_stubs.sv vsrc/test/s_interrupt_pending_tb.sv
+	./build/s-interrupt/s_interrupt_pending_tb
 
 clean:
 	rm -rf build
