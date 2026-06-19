@@ -25,11 +25,12 @@
 - 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
 - 新增 `SUM/MXR` 支持：`MXR` 允许 load 读取 execute-only 页，`SUM` 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
 - 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
+- 新增仿真侧简化 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器，并提供同步 512B sector 读写扩展。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
-- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault` 与 `test-labplus-sinterrupt` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt` 与 `test-labplus-virtio` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
-本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试和 S 态中断定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试和 simple virtio block MMIO 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 ## 3. Atomic Extension 设计
 
@@ -186,6 +187,26 @@ RISC-V Sv39 的叶子 PTE 中，`A` 表示 accessed，`D` 表示 dirty。为了�
 
 实现上，`core` 将当前 `mstatus` 输出到 MMU，MMU 在叶子 PTE 权限判断时组合使用 `priv_mode`、`is_instr`、`is_write`、`SUM/MXR` 和 `R/W/X/U` 位。该改动不改变 CSR 写入路径，`MSTATUS_MASK/SSTATUS_MASK` 之前已经开放了 `SUM/MXR` 位，因此软件可以通过 `mstatus/sstatus` 正常设置。
 
+### 4.10 简化 virtio/disk MMIO
+
+为了继续推进 xv6 所需的块设备方向，本次先在仿真侧加入一个简化块设备，而不是直接实现完整 virtio queue。实现方式是新增 `SimMemoryWithVirtio` 包装器：它拦截 `0x10001000` 到 `0x100011ff` 的 MMIO 访问，其它请求继续转发给原来的 `RAMHelper2`，因此 UART、mtime/mtimecmp、msip 和普通 RAM 行为保持不变。
+
+兼容识别寄存器：
+
+- `0x10001000`：低 32 位为 virtio magic `0x74726976`，高 32 位为 version `2`。
+- `0x10001008`：低 32 位为 device id `2`，表示 block device；高 32 位为 vendor `0x554d4551`。
+
+简化同步块设备扩展：
+
+- `0x10001100`：sector index。
+- `0x10001108`：DMA memory address。
+- `0x10001110`：command，`1` 表示从 disk 读 512B 到 RAM，`2` 表示从 RAM 写 512B 到 disk。
+- `0x10001118`：status，`0` 表示完成，`1` 表示未知命令，`2` 表示 sector 越界。
+- `0x10001120`：sector 数量，当前为 16。
+- `0x10001128`：sector 大小，当前为 512B。
+
+该设备是同步完成模型，适合后续写一个很薄的软件适配层先绕开完整 virtio descriptor/avail/used ring；完整 xv6 原生 virtio 驱动仍需要后续实现 queue 和中断通知。
+
 ## 5. 前端性能优化
 
 ### 5.1 顺序取指提前
@@ -258,6 +279,8 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
   - 新增委托后的 `SSIP/STIP/SEIP` pending 镜像，支持 `swint/trint/exint` 进入 S trap。
   - 新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水。
   - 输出当前 `mstatus` 给 MMU 使用。
+- `vsrc/SimTop.sv`
+  - 仿真顶层改为实例化 `SimMemoryWithVirtio`，在原 RAM/CLINT 行为前增加 virtio/simple-block MMIO 拦截。
 - `vsrc/include/common.sv`
   - 扩展 CBus/IBus/DBus 响应，增加 `page_fault`。
   - 扩展 CBus 请求，增加 `is_instr` 标记。
@@ -285,8 +308,12 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
   - 验证 `trint` 在 `mideleg.STIP=1`、`mie.STIE=1`、`mstatus.SIE=1` 后进入 S trap，`scause` 为 interrupt cause 5。
 - `vsrc/test/difftest_stubs.sv`
   - 为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
+- `vsrc/util/SimMemoryWithVirtio.sv`
+  - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO。
+- `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
+  - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证 512B sector write/read。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault` 和 `test-labplus-sinterrupt`。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt` 和 `test-labplus-virtio`。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -451,11 +478,33 @@ S-mode interrupt pending delegation test passed.
 
 该测试直接实例化 `core`，手写最小指令流：M 态设置 `mideleg=0x222`、`mie.STIE=1`、`stvec=0x80`、`mepc=0x40`、`mstatus.MPP=S/SIE=1`，随后执行 `mret`。测试保持 `trint=1`，确认 CPU 返回 S 态后进入 S trap，并检查 `scause=0x8000000000000005`、`sepc=0x40`，从而覆盖 `trint -> STIP -> S-mode timer interrupt` 的转换路径。
 
+### 7.10 Simple virtio block MMIO 定向测试
+
+运行：
+
+```bash
+make test-labplus-virtio
+```
+
+关键输出：
+
+```text
+virtio_magic_version [OK]
+virtio_device_vendor [OK]
+simple_block_capacity [OK]
+simple_block_sector_size [OK]
+simple_block_write_status [OK]
+simple_block_read_status [OK]
+simple virtio block MMIO test passed.
+```
+
+测试流程为：先读取 virtio magic/version/device/vendor 和 simple-block 容量寄存器；再通过 DPI RAM stub 在 RAM 中布置 512B pattern，向设备写 sector/mem/cmd=write；清空 RAM 后执行 cmd=read；最后逐 word 检查 RAM 中 512B 数据被恢复。
+
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的前三步：S-mode/trap delegation、S 态中断 pending 委托转换，以及 MMU page fault/PTE 基础权限检查，并补了独立 page fault 和 S interrupt 定向测试。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的前四步：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查，以及一个简化同步块设备 MMIO，并补了独立 page fault、S interrupt 和 simple-block 定向测试。后续如果继续推进 xv6，需要补充：
 
-- virtio 或简化磁盘 MMIO，从 `fs.img` 同步读取块数据。
+- 完整 virtio descriptor/avail/used ring，或从 `fs.img` 加载初始 disk 内容。
 - 更完整的 PLIC claim/complete、优先级和 enable/pending 寄存器模型。
 - cache、分支预测或多级流水线，用于进一步提升 `test-labplus-2` 性能。
 
@@ -463,7 +512,7 @@ S-mode interrupt pending delegation test passed.
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新，以及独立 MMU page fault 与 S interrupt 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、简化 virtio/disk MMIO，以及独立 MMU page fault、S interrupt 和 simple-block 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 

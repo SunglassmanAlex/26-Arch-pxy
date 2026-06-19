@@ -6,6 +6,7 @@
 `include "util/DBusToCBus.sv"
 `include "util/CBusArbiter.sv"
 `include "util/MMU.sv"
+`include "util/SimMemoryWithVirtio.sv"
 
 module SimTop import common::*;(
   input         clock,
@@ -63,7 +64,7 @@ module SimTop import common::*;(
         .oresp(oresp)
     );
 
-    RAMHelper2 ram(
+    SimMemoryWithVirtio ram(
         .clk(clock), .reset, .oreq, .oresp, .trint, .swint, .exint
     );
 
