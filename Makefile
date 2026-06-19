@@ -13,6 +13,7 @@ no_arguments:
 	@echo "  - test-labplus-2: Run Lab+ performance test"
 	@echo "  - test-labplus-3: Run Lab+ atomic extension test"
 	@echo "  - test-labplus-4: Run Lab+ PMP test"
+	@echo "  - test-labplus-pagefault: Run Lab+ directed MMU page-fault test"
 
 init:
 	git submodule update --init --recursive
@@ -77,6 +78,14 @@ test-labplus-3: sim
 
 test-labplus-4: sim
 	TEST=all ./build/emu --no-diff -i ./ready-to-run/lab+/4/all-test-privfull.bin $(VOPT) || true
+
+test-labplus-pagefault:
+	rm -rf build/mmu-page-fault
+	verilator --binary --timing --top-module mmu_page_fault_tb \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/mmu-page-fault -o mmu_page_fault_tb \
+	  vsrc/test/mmu_page_fault_tb.sv vsrc/util/MMU.sv
+	./build/mmu-page-fault/mmu_page_fault_tb
 
 clean:
 	rm -rf build

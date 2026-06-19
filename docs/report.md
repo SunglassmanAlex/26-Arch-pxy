@@ -24,9 +24,10 @@
 - 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
 - 新增 `SUM/MXR` 支持：`MXR` 允许 load 读取 execute-only 页，`SUM` 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
 - 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
-- 新增 `test-labplus-2/3/4` 三个 Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
+- 新增 `test-labplus-2/3/4` 与 `test-labplus-pagefault` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
-本次新增通过的核心测试为 atomic extension 和 privileged/PMP sys-test。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test 和 MMU page fault 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 ## 3. Atomic Extension 设计
 
@@ -272,8 +273,11 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
 - `vsrc/util/CBusArbiter.sv`
   - idle 状态下直接透传当前请求。
   - 同周期完成的请求不再进入 busy。
+- `vsrc/test/mmu_page_fault_tb.sv`
+  - 新增独立 Verilator testbench，直接实例化 `MMU`。
+  - 构造固定三层 Sv39 页表，验证 instruction/load/store page fault 与正常 load 翻译。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4` 和 `test-labplus-pagefault`。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -401,11 +405,30 @@ Privileged test finished.
 Exit with code = 0
 ```
 
+### 7.8 MMU page fault 定向测试
+
+运行：
+
+```bash
+make test-labplus-pagefault
+```
+
+关键输出：
+
+```text
+instruction_page_fault [OK]
+load_page_fault [OK]
+store_page_fault [OK]
+load_ok [OK]
+MMU page fault directed tests passed.
+```
+
+该测试不依赖完整 CPU 或外部镜像，而是直接实例化 `MMU`，用一个简单的同步 CBus 内存模型返回三层 Sv39 页表项。前三个用例分别把叶子 PTE 配成取指不可执行、load execute-only 且 `MXR=0`、store 不可写，确认 `page_fault=1`；最后一个用例使用合法可读页，确认翻译到 `0x4000` 且不产生 fault。
+
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的前两步：S-mode/trap delegation，以及 MMU page fault/PTE 基础权限检查。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的前两步：S-mode/trap delegation，以及 MMU page fault/PTE 基础权限检查，并补了独立 page fault 定向测试。后续如果继续推进 xv6，需要补充：
 
-- 更有针对性的 page fault 单元测试，覆盖 instruction/load/store 三种 fault。
 - virtio 或简化磁盘 MMIO，从 `fs.img` 同步读取块数据。
 - S 态 timer/external interrupt 与 CLINT/PLIC 的转换路径。
 - cache、分支预测或多级流水线，用于进一步提升 `test-labplus-2` 性能。
@@ -414,7 +437,7 @@ Exit with code = 0
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充，以及 PTE A/D 位硬件更新。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新，以及独立 MMU page fault 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 
