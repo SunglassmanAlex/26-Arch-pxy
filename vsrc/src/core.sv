@@ -36,6 +36,7 @@ module core import common::*;(
 	localparam word_t MIP_SEIP_BIT     = 64'h0000_0000_0000_0200;
 	localparam word_t MIP_MEIP_BIT     = 64'h0000_0000_0000_0800;
 	localparam word_t MIP_HW_MASK      = MIP_MSIP_BIT | MIP_MTIP_BIT | MIP_MEIP_BIT;
+	localparam int PMP_ENTRIES = 8;
 
 	addr_t pc, if_req_addr, if_id_pc;
 	logic  if_pending, if_id_valid, if_can_request;
@@ -70,7 +71,8 @@ module core import common::*;(
 	word_t csr_mstatus, csr_mtvec, csr_mip, csr_mie, csr_mscratch;
 	word_t csr_mcause, csr_mtval, csr_mepc, csr_mcycle, csr_satp;
 	word_t csr_stvec, csr_sscratch, csr_sepc, csr_scause, csr_stval;
-	word_t csr_medeleg, csr_mideleg, csr_pmpaddr0, csr_pmpcfg0;
+	word_t csr_medeleg, csr_mideleg, csr_pmpcfg0;
+	word_t csr_pmpaddr[PMP_ENTRIES];
 	word_t csr_mhartid;
 	word_t mip_value;
 	logic [1:0] current_priv, fetch_priv;
@@ -292,7 +294,14 @@ module core import common::*;(
 			CSR_MHARTID:  csr_read = csr_mhartid;
 			CSR_MEDELEG:  csr_read = csr_medeleg;
 			CSR_MIDELEG:  csr_read = csr_mideleg;
-			CSR_PMPADDR0: csr_read = csr_pmpaddr0;
+			CSR_PMPADDR0: csr_read = csr_pmpaddr[0];
+			CSR_PMPADDR1: csr_read = csr_pmpaddr[1];
+			CSR_PMPADDR2: csr_read = csr_pmpaddr[2];
+			CSR_PMPADDR3: csr_read = csr_pmpaddr[3];
+			CSR_PMPADDR4: csr_read = csr_pmpaddr[4];
+			CSR_PMPADDR5: csr_read = csr_pmpaddr[5];
+			CSR_PMPADDR6: csr_read = csr_pmpaddr[6];
+			CSR_PMPADDR7: csr_read = csr_pmpaddr[7];
 			CSR_PMPCFG0:  csr_read = csr_pmpcfg0;
 			default:      csr_read = 64'd0;
 		endcase
@@ -305,7 +314,9 @@ module core import common::*;(
 			CSR_MSCRATCH, CSR_SSCRATCH, CSR_MEPC, CSR_SEPC,
 			CSR_MCAUSE, CSR_SCAUSE, CSR_MTVAL, CSR_STVAL,
 			CSR_SATP, CSR_MCYCLE, CSR_MHARTID,
-			CSR_MEDELEG, CSR_MIDELEG, CSR_PMPADDR0, CSR_PMPCFG0:
+			CSR_MEDELEG, CSR_MIDELEG, CSR_PMPADDR0, CSR_PMPADDR1,
+			CSR_PMPADDR2, CSR_PMPADDR3, CSR_PMPADDR4, CSR_PMPADDR5,
+			CSR_PMPADDR6, CSR_PMPADDR7, CSR_PMPCFG0:
 				csr_supported = 1'b1;
 			default:
 				csr_supported = 1'b0;
@@ -330,11 +341,29 @@ module core import common::*;(
 		endcase
 	endfunction
 
-	function automatic logic pmp0_match(input addr_t addr, input msize_t size);
+	function automatic logic [7:0] pmp_cfg(input int unsigned entry);
+		unique case (entry)
+			0: pmp_cfg = csr_pmpcfg0[7:0];
+			1: pmp_cfg = csr_pmpcfg0[15:8];
+			2: pmp_cfg = csr_pmpcfg0[23:16];
+			3: pmp_cfg = csr_pmpcfg0[31:24];
+			4: pmp_cfg = csr_pmpcfg0[39:32];
+			5: pmp_cfg = csr_pmpcfg0[47:40];
+			6: pmp_cfg = csr_pmpcfg0[55:48];
+			7: pmp_cfg = csr_pmpcfg0[63:56];
+			default: pmp_cfg = 8'd0;
+		endcase
+	endfunction
+
+	function automatic logic pmp_entry_match(input int unsigned entry, input addr_t addr, input msize_t size);
+		logic [7:0] cfg;
 		logic [1:0] addr_mode;
-		word_t start_addr, end_addr, base, top, bytes, low_mask;
+		word_t start_addr, end_addr, base, top, bytes, low_mask, pmpaddr, prev_pmpaddr;
 		int ones;
-		addr_mode = csr_pmpcfg0[4:3];
+		cfg = pmp_cfg(entry);
+		addr_mode = cfg[4:3];
+		pmpaddr = csr_pmpaddr[entry];
+		prev_pmpaddr = (entry == 0) ? 64'd0 : csr_pmpaddr[entry - 1];
 		start_addr = addr;
 		end_addr = addr + access_size_bytes(size) - 64'd1;
 		base = 64'd0;
@@ -342,32 +371,32 @@ module core import common::*;(
 		bytes = 64'd0;
 		low_mask = 64'd0;
 		ones = 0;
-		pmp0_match = 1'b0;
+		pmp_entry_match = 1'b0;
 
 		unique case (addr_mode)
-			2'b01: begin // TOR, with implicit lower bound 0 for pmp0.
-				base = 64'd0;
-				top = csr_pmpaddr0 << 2;
-				pmp0_match = (start_addr >= base) && (end_addr < top);
+			2'b01: begin // TOR
+				base = (entry == 0) ? 64'd0 : (prev_pmpaddr << 2);
+				top = pmpaddr << 2;
+				pmp_entry_match = (start_addr >= base) && (end_addr < top);
 			end
 			2'b10: begin // NA4
-				base = csr_pmpaddr0 << 2;
+				base = pmpaddr << 2;
 				top = base + 64'd4;
-				pmp0_match = (start_addr >= base) && (end_addr < top);
+				pmp_entry_match = (start_addr >= base) && (end_addr < top);
 			end
 			2'b11: begin // NAPOT
 				for (int i = 0; i < 54; i += 1) begin
-					if (csr_pmpaddr0[i]) ones += 1;
+					if (pmpaddr[i]) ones += 1;
 					else break;
 				end
 				bytes = 64'd1 << (ones + 3);
 				low_mask = (ones == 0) ? 64'd0 : ((64'd1 << ones) - 64'd1);
-				base = (csr_pmpaddr0 & ~low_mask) << 2;
+				base = (pmpaddr & ~low_mask) << 2;
 				top = base + bytes;
-				pmp0_match = (start_addr >= base) && (end_addr < top);
+				pmp_entry_match = (start_addr >= base) && (end_addr < top);
 			end
 			default: begin
-				pmp0_match = 1'b0;
+				pmp_entry_match = 1'b0;
 			end
 		endcase
 	endfunction
@@ -379,21 +408,36 @@ module core import common::*;(
 		input logic is_write,
 		input logic [1:0] mode
 	);
-		logic [7:0] cfg;
-		logic active, matched, permitted;
-		cfg = csr_pmpcfg0[7:0];
-		active = (cfg[4:3] != 2'b00);
-		matched = active && pmp0_match(addr, size);
-		permitted = is_exec ? cfg[2] : (is_write ? cfg[1] : cfg[0]);
+		logic [7:0] cfg, matched_cfg;
+		logic any_active, matched, permitted;
+		any_active = 1'b0;
+		matched = 1'b0;
+		matched_cfg = 8'd0;
 
-		if (!active) begin
+		for (int entry = 0; entry < PMP_ENTRIES; entry += 1) begin
+			cfg = pmp_cfg(entry);
+			if (cfg[4:3] != 2'b00) begin
+				any_active = 1'b1;
+				if (!matched && pmp_entry_match(entry, addr, size)) begin
+					matched = 1'b1;
+					matched_cfg = cfg;
+				end
+			end
+		end
+
+		permitted = is_exec ? matched_cfg[2] : (is_write ? matched_cfg[1] : matched_cfg[0]);
+
+		if (!any_active) begin
 			pmp_access_fault = 1'b0;
 		end
-		else if ((mode == PRIV_M) && !cfg[7]) begin
+		else if (!matched) begin
+			pmp_access_fault = (mode != PRIV_M);
+		end
+		else if ((mode == PRIV_M) && !matched_cfg[7]) begin
 			pmp_access_fault = 1'b0;
 		end
 		else begin
-			pmp_access_fault = !matched || !permitted;
+			pmp_access_fault = !permitted;
 		end
 	endfunction
 
@@ -1400,7 +1444,9 @@ module core import common::*;(
 			csr_stval <= '0;
 			csr_medeleg <= '0;
 			csr_mideleg <= '0;
-			csr_pmpaddr0 <= '0;
+			for (int entry = 0; entry < PMP_ENTRIES; entry += 1) begin
+				csr_pmpaddr[entry] <= '0;
+			end
 			csr_pmpcfg0 <= '0;
 			csr_mhartid <= '0;
 			current_priv <= PRIV_M;
@@ -1455,7 +1501,14 @@ module core import common::*;(
 					CSR_MCYCLE:   csr_mcycle <= wb_csr_wdata;
 					CSR_MEDELEG:  csr_medeleg <= wb_csr_wdata & MEDELEG_MASK;
 					CSR_MIDELEG:  csr_mideleg <= wb_csr_wdata & MIDELEG_MASK;
-					CSR_PMPADDR0: csr_pmpaddr0 <= wb_csr_wdata;
+					CSR_PMPADDR0: csr_pmpaddr[0] <= wb_csr_wdata;
+					CSR_PMPADDR1: csr_pmpaddr[1] <= wb_csr_wdata;
+					CSR_PMPADDR2: csr_pmpaddr[2] <= wb_csr_wdata;
+					CSR_PMPADDR3: csr_pmpaddr[3] <= wb_csr_wdata;
+					CSR_PMPADDR4: csr_pmpaddr[4] <= wb_csr_wdata;
+					CSR_PMPADDR5: csr_pmpaddr[5] <= wb_csr_wdata;
+					CSR_PMPADDR6: csr_pmpaddr[6] <= wb_csr_wdata;
+					CSR_PMPADDR7: csr_pmpaddr[7] <= wb_csr_wdata;
 					CSR_PMPCFG0:  csr_pmpcfg0 <= wb_csr_wdata;
 					default: begin
 					end

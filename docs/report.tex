@@ -25,7 +25,7 @@
   \item 保留 Lab5 的 Sv39 MMU、2 MiB/1 GiB hugepage 支持、特权级和 Lab6 异常中断实现。
   \item 新增 Lab+ atomic extension：实现 AMO W 系列指令以及 \texttt{LR.W/SC.W}，并接入 difftest atomic event。
   \item 新增前端性能优化：顺序取指提前发起请求，并为 \texttt{CBusArbiter} 增加 idle fast path，减少固定仲裁空泡。
-  \item 新增 PMP0/privfull 支持：支持 PMP0 的 \texttt{OFF/TOR/NA4/NAPOT} 匹配，产生 instruction/load/store access fault，并通过 \texttt{lab+/4} privileged sys-test。
+  \item 新增 PMP/privfull 支持：支持 \texttt{pmpcfg0} 中 8 个 PMP entry 的 \texttt{OFF/TOR/NA4/NAPOT} 匹配，产生 instruction/load/store access fault，并通过 \texttt{lab+/4} privileged sys-test。
   \item 新增 \texttt{EBREAK} 断点异常支持：SYSTEM/funct12=\texttt{0x001} 触发同步异常 cause 3。
   \item 新增 \texttt{FENCE/FENCE.I} 合法 no-op 支持，提升编译器生成程序的兼容性。
   \item 新增 xv6 主线部分进展：补充真实 S-mode、\texttt{SRET}、异常/中断委托和 S 态 trap CSR 写入路径。
@@ -76,16 +76,18 @@ AMO 不能直接作为普通 store event 上报。修复方式如下：
 
 \texttt{lab+/4} 的 \texttt{instr\_misalign} 使用 \texttt{jalr} 跳转到 \texttt{target + 1}。原实现使用清除 bit0 后的 \texttt{jalr} 目标判断是否不对齐，因此该项不会触发异常。为匹配课程测试，本次改为正常跳转目标仍使用 \texttt{\{raw\_target[63:1], 1'b0\}}，但 instruction address misaligned 判断和 \texttt{mtval} 使用未清 bit0 的 \texttt{raw\_target}。该修改后 Lab6 的 \texttt{instr\_misalign} 回归仍通过。
 
-\subsection{PMP0 匹配与权限}
+\subsection{PMP 匹配与权限}
 
-实现了一个最小 PMP0，用于覆盖 Lab+ privfull 测试：
+实现了 PMP 多 entry 匹配，用于覆盖 Lab+ privfull 测试并补齐更通用的 PMP 行为：
 
 \begin{itemize}
-  \item 支持 \texttt{pmpcfg0[4:3]} 的 \texttt{OFF}、\texttt{TOR}、\texttt{NA4}、\texttt{NAPOT} 地址匹配。
-  \item 支持 \texttt{pmpcfg0[2:0]} 的 \texttt{R/W/X} 权限检查。
-  \item \texttt{pmpcfg0.A=OFF} 时不影响原有 Lab5/Lab6。
-  \item PMP 激活后，U 态未命中 PMP 或权限不足会触发 access fault。
-  \item M 态在 PMP entry 未 lock 时绕过权限检查。
+  \item 支持 \texttt{pmpaddr0} 到 \texttt{pmpaddr7}，\texttt{pmpcfg0} 中每个 8-bit 配置项对应一个 PMP entry。
+  \item 支持每个 entry 的 \texttt{OFF}、\texttt{TOR}、\texttt{NA4}、\texttt{NAPOT} 地址匹配。
+  \item \texttt{TOR} entry 使用前一个 \texttt{pmpaddr} 作为下界，entry0 的下界为 0。
+  \item 低编号 entry 优先，命中后使用该 entry 的 \texttt{R/W/X/L} 权限判断。
+  \item 所有 PMP entry 都为 \texttt{OFF} 时不影响原有 Lab5/Lab6。
+  \item PMP 激活后，U/S 态未命中 PMP 或权限不足会触发 access fault。
+  \item M 态在命中 entry 未 lock 时绕过权限检查，命中 lock entry 时按权限检查。
 \end{itemize}
 
 测试程序设置的 PMP 范围为 \texttt{0x80006000} 到 \texttt{0x80007000}，即 4096B 用户区。PMP 激活后，用户态访问该范围外的数据或跳转到该范围外取指都会触发异常。
@@ -214,12 +216,12 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
 \section{代码修改}
 
 \begin{itemize}
-  \item \texttt{vsrc/src/core.sv}：新增 AMO 解码、AMO 结果计算、reservation 记录；扩展访存状态机；新增 difftest atomic event；新增 \texttt{if\_can\_request}；新增 PMP0 匹配、取指 access fault 注入、load/store access fault；新增 \texttt{fetch\_priv}；新增 \texttt{EBREAK} 解码和 breakpoint exception cause 3；新增 \texttt{FENCE/FENCE.I} 合法 no-op 解码；新增 S-mode、\texttt{SRET}、\texttt{medeleg/mideleg} 委托、S 态 trap CSR 写入；新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水；输出当前 \texttt{mstatus} 给 MMU 使用。
+  \item \texttt{vsrc/src/core.sv}：新增 AMO 解码、AMO 结果计算、reservation 记录；扩展访存状态机；新增 difftest atomic event；新增 \texttt{if\_can\_request}；新增 8-entry PMP 匹配、取指 access fault 注入、load/store access fault；新增 \texttt{fetch\_priv}；新增 \texttt{EBREAK} 解码和 breakpoint exception cause 3；新增 \texttt{FENCE/FENCE.I} 合法 no-op 解码；新增 S-mode、\texttt{SRET}、\texttt{medeleg/mideleg} 委托、S 态 trap CSR 写入；新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水；输出当前 \texttt{mstatus} 给 MMU 使用。
   \item \texttt{vsrc/include/common.sv}：扩展 CBus/IBus/DBus 响应，增加 \texttt{page\_fault}；扩展 CBus 请求，增加 \texttt{is\_instr} 标记。
   \item \texttt{vsrc/util/MMU.sv}：新增 fault 状态和 PTE 权限检查，不再将无效 PTE 转成物理地址 0；支持 Sv39 canonical 地址检查和巨页 PPN 对齐检查；支持 \texttt{SUM/MXR} 对 S/U 态数据访问和 execute-only 页读取的影响。
   \item \texttt{vsrc/util/IBusToCBus.sv}、\texttt{vsrc/util/DBusToCBus.sv}：传递 \texttt{is\_instr} 与 \texttt{page\_fault}。
   \item \texttt{vsrc/mycpu\_top.sv}、\texttt{vsrc/util/CBusToAXI.sv}、\texttt{vivado/src/with\_delay/soc\_top.sv}：对真实内存响应源固定 \texttt{page\_fault=0}。
-  \item \texttt{vsrc/include/csr.sv}：修正 \texttt{SSTATUS\_MASK}，开放 SIE/SPIE/SPP 等 S 态状态位；设置 \texttt{MEDELEG\_MASK/MIDELEG\_MASK}，支持常见异常和 S 级中断委托。
+  \item \texttt{vsrc/include/csr.sv}：修正 \texttt{SSTATUS\_MASK}，开放 SIE/SPIE/SPP 等 S 态状态位；设置 \texttt{MEDELEG\_MASK/MIDELEG\_MASK}，支持常见异常和 S 级中断委托；新增 \texttt{pmpaddr1} 到 \texttt{pmpaddr7} CSR 地址常量。
   \item \texttt{vsrc/util/CBusArbiter.sv}：idle 状态下直接透传当前请求，同周期完成的请求不再进入 busy。
   \item \texttt{Makefile}：新增 \texttt{test-labplus-2}、\texttt{test-labplus-3}、\texttt{test-labplus-4}。
   \item \texttt{ready-to-run/lab+/}：补充官方 Lab+ 测试二进制和汇编反汇编文件。
@@ -290,7 +292,7 @@ Exit with code = 0
 
 \subsection{S-mode/SRET 回归}
 
-本次新增 S-mode、委托路径、MMU page fault、PTE 权限检查与 \texttt{SUM/MXR} 后重新运行：
+本次新增 S-mode、委托路径、MMU page fault、PTE 权限检查、\texttt{SUM/MXR} 与 8-entry PMP 后重新运行：
 
 \begin{Verbatim}[fontsize=\small]
 make test-labplus-3
@@ -311,13 +313,13 @@ Exit with code = 0
 
 \section{后续可做项}
 
-本次已经完成 xv6 主线的前两步：S-mode/trap delegation，以及 MMU page fault/PTE 基础权限检查。后续如果继续推进 xv6，需要补充 PTE A/D 位硬件更新或对应 trap 修复路径、更有针对性的 page fault 单元测试、virtio 或简化磁盘 MMIO、S 态 timer/external interrupt 与 CLINT/PLIC 的转换路径，以及更完整的 PMP 多 entry 支持。
+本次已经完成 xv6 主线的前两步：S-mode/trap delegation，以及 MMU page fault/PTE 基础权限检查。后续如果继续推进 xv6，需要补充 PTE A/D 位硬件更新或对应 trap 修复路径、更有针对性的 page fault 单元测试、virtio 或简化磁盘 MMIO、S 态 timer/external interrupt 与 CLINT/PLIC 的转换路径。
 
-性能方向还可以继续实现 cache、分支预测或多级流水线，用于进一步提升 \texttt{test-labplus-2}。这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 PMP0/atomic/前端空泡优化，因此本次没有继续扩大范围。
+性能方向还可以继续实现 cache、分支预测或多级流水线，用于进一步提升 \texttt{test-labplus-2}。这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 8-entry PMP、atomic 和前端空泡优化，因此本次没有继续扩大范围。
 
 \section{总结}
 
-本次 Lab+ 新增完成了 atomic extension、PMP0/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I} 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、MMU page fault/PTE 基础权限检查，以及 \texttt{SUM/MXR} 权限补充。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I} 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、MMU page fault/PTE 基础权限检查，以及 \texttt{SUM/MXR} 权限补充。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 \section{AI 使用说明}
 

@@ -17,7 +17,7 @@
 - 保留 Lab5 的 Sv39 MMU、2 MiB/1 GiB hugepage 支持、特权级和 Lab6 异常中断实现。
 - 新增 Lab+ atomic extension：实现 AMO W 系列指令以及 `LR.W/SC.W`，并接入 difftest atomic event。
 - 新增前端性能优化：顺序取指提前发起请求，并为 `CBusArbiter` 增加 idle fast path，减少固定仲裁空泡。
-- 新增 PMP0/privfull 支持：支持 PMP0 的 `OFF/TOR/NA4/NAPOT` 匹配，产生 instruction/load/store access fault，并通过 `lab+/4` privileged sys-test。
+- 新增 PMP/privfull 支持：支持 `pmpcfg0` 中 8 个 PMP entry 的 `OFF/TOR/NA4/NAPOT` 匹配，产生 instruction/load/store access fault，并通过 `lab+/4` privileged sys-test。
 - 新增 `EBREAK` 断点异常支持：SYSTEM/funct12=`0x001` 触发同步异常 cause 3。
 - 新增 `FENCE/FENCE.I` 合法 no-op 支持，提升编译器生成程序的兼容性。
 - 新增 xv6 主线部分进展：补充真实 S-mode、`SRET`、异常/中断委托和 S 态 trap CSR 写入路径。
@@ -86,15 +86,17 @@ AMO 不能直接作为普通 store event 上报。第一次测试时，寄存器
 
 该修改后 Lab6 的 `instr_misalign` 回归仍通过。
 
-### 4.2 PMP0 匹配与权限
+### 4.2 PMP 匹配与权限
 
-实现了一个最小 PMP0，用于覆盖 Lab+ privfull 测试：
+实现了 PMP 多 entry 匹配，用于覆盖 Lab+ privfull 测试并补齐更通用的 PMP 行为：
 
-- 支持 `pmpcfg0[4:3]` 的 `OFF`、`TOR`、`NA4`、`NAPOT` 地址匹配。
-- 支持 `pmpcfg0[2:0]` 的 `R/W/X` 权限检查。
-- `pmpcfg0.A=OFF` 时不影响原有 Lab5/Lab6。
-- PMP 激活后，U 态未命中 PMP 或权限不足会触发 access fault。
-- M 态在 PMP entry 未 lock 时绕过权限检查。
+- 支持 `pmpaddr0` 到 `pmpaddr7`，`pmpcfg0` 中每个 8-bit 配置项对应一个 PMP entry。
+- 支持每个 entry 的 `OFF`、`TOR`、`NA4`、`NAPOT` 地址匹配。
+- `TOR` entry 使用前一个 `pmpaddr` 作为下界，entry0 的下界为 0。
+- 低编号 entry 优先，命中后使用该 entry 的 `R/W/X/L` 权限判断。
+- 所有 PMP entry 都为 `OFF` 时不影响原有 Lab5/Lab6。
+- PMP 激活后，U/S 态未命中 PMP 或权限不足会触发 access fault。
+- M 态在命中 entry 未 lock 时绕过权限检查，命中 lock entry 时按权限检查。
 
 测试程序设置的 PMP 范围为 `0x80006000` 到 `0x80007000`，即 4096B 用户区。PMP 激活后，用户态访问该范围外的数据或跳转到该范围外取指都会触发异常。
 
@@ -232,7 +234,7 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
   - 扩展访存状态机，支持 AMO read-modify-write。
   - 新增 difftest atomic event 上报。
   - 新增 `if_can_request`，减少顺序指令之间的取指空泡。
-  - 新增 PMP0 匹配、取指 access fault 注入、load/store access fault。
+  - 新增 8-entry PMP 匹配、取指 access fault 注入、load/store access fault。
   - 新增 `fetch_priv`，处理 trap/mret 重定向期间的取指权限判断。
   - 新增 `EBREAK` 解码和 breakpoint exception cause 3。
   - 新增 `FENCE/FENCE.I` 合法 no-op 解码。
@@ -253,6 +255,7 @@ STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
 - `vsrc/include/csr.sv`
   - 修正 `SSTATUS_MASK`，开放 SIE/SPIE/SPP 等 S 态状态位。
   - 设置 `MEDELEG_MASK/MIDELEG_MASK`，支持常见异常和 S 级中断委托。
+  - 新增 `pmpaddr1` 到 `pmpaddr7` CSR 地址常量。
 - `vsrc/util/CBusArbiter.sv`
   - idle 状态下直接透传当前请求。
   - 同周期完成的请求不再进入 busy。
@@ -366,7 +369,7 @@ Exit with code = 0
 
 ### 7.7 S-mode/SRET 回归
 
-本次新增 S-mode、委托路径、MMU page fault、PTE 权限检查与 `SUM/MXR` 后重新运行：
+本次新增 S-mode、委托路径、MMU page fault、PTE 权限检查、`SUM/MXR` 与 8-entry PMP 后重新运行：
 
 ```text
 make test-labplus-3
@@ -393,14 +396,13 @@ Exit with code = 0
 - 更有针对性的 page fault 单元测试，覆盖 instruction/load/store 三种 fault。
 - virtio 或简化磁盘 MMIO，从 `fs.img` 同步读取块数据。
 - S 态 timer/external interrupt 与 CLINT/PLIC 的转换路径。
-- 更完整的 PMP 多 entry 支持。
 - cache、分支预测或多级流水线，用于进一步提升 `test-labplus-2` 性能。
 
-这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 PMP0/atomic/前端空泡优化，因此本次没有继续扩大范围。
+这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 8-entry PMP、atomic 和前端空泡优化，因此本次没有继续扩大范围。
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、PMP0/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、MMU page fault/PTE 基础权限检查，以及 `SUM/MXR` 权限补充。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、MMU page fault/PTE 基础权限检查，以及 `SUM/MXR` 权限补充。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 
