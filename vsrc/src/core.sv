@@ -9,6 +9,7 @@ module core import common::*;(
 	input  logic       clk, reset,
 	output ibus_req_t  ireq,
 	input  ibus_resp_t iresp,
+	output logic       if_flush,
 	output dbus_req_t  dreq,
 	input  dbus_resp_t dresp,
 	output logic [1:0] priv_mode,
@@ -46,6 +47,7 @@ module core import common::*;(
 	addr_t if_id_fault_tval;
 	logic  id_consume;
 	logic  id_redirect;
+	logic  id_fast_redirect;
 	addr_t id_redirect_target;
 
 	word_t gpr[31:0];
@@ -150,6 +152,21 @@ module core import common::*;(
 			end
 			if (if_id_valid && id_consume && id_redirect) begin
 				pc <= id_redirect_target;
+				if (id_fast_redirect && !if_pending) begin
+					if (pmp_access_fault(id_redirect_target, MSIZE4, 1'b1, 1'b0, fetch_priv)) begin
+						if_pending <= 1'b0;
+						if_id_valid <= 1'b1;
+						if_id_pc <= id_redirect_target;
+						if_id_instr <= 32'h0000_0013;
+						if_id_access_fault <= 1'b1;
+						if_id_page_fault <= 1'b0;
+						if_id_fault_tval <= id_redirect_target;
+					end
+					else begin
+						if_pending <= 1'b1;
+						if_req_addr <= id_redirect_target;
+					end
+				end
 			end
 		end
 	end
@@ -167,8 +184,6 @@ module core import common::*;(
 	assign imm_j = {{43{if_id_instr[31]}}, if_id_instr[31], if_id_instr[19:12], if_id_instr[20], if_id_instr[30:21], 1'b0};
 
 	word_t rs1_val, rs2_val;
-	assign rs1_val = (rs1 == 5'd0) ? 64'd0 : gpr[rs1];
-	assign rs2_val = (rs2 == 5'd0) ? 64'd0 : gpr[rs2];
 
 	always_ff @(posedge clk) begin
 		if (reset) begin
@@ -1122,6 +1137,8 @@ module core import common::*;(
 		assign id_trap_to_s = id_trap && trap_delegated(id_trap_is_interrupt, id_trap_cause, current_priv);
 		assign id_redirect = id_trap || (id_is_jal || id_is_jalr) ||
 			(id_is_branch && id_branch_taken) || id_is_csr || id_is_mret || id_is_sret;
+		assign id_fast_redirect = !id_trap &&
+			(id_is_jal || id_is_jalr || (id_is_branch && id_branch_taken));
 		assign if_can_request = !if_pending && !mem_pending &&
 			(!if_id_valid || (id_consume && !id_redirect));
 		assign id_redirect_target = id_trap ? (id_trap_to_s ? {csr_stvec[63:2], 2'b00} : {csr_mtvec[63:2], 2'b00}) :
@@ -1406,6 +1423,13 @@ module core import common::*;(
 	assign wb_trap_tval = ex_wb_trap_tval;
 	assign wb_trap_pc = ex_wb_trap_pc;
 	assign wb_priv = ex_wb_priv;
+	assign rs1_val = (rs1 == 5'd0) ? 64'd0 :
+		((wb_valid && wb_wen && (wb_rd == rs1)) ? wb_data : gpr[rs1]);
+	assign rs2_val = (rs2 == 5'd0) ? 64'd0 :
+		((wb_valid && wb_wen && (wb_rd == rs2)) ? wb_data : gpr[rs2]);
+	assign if_flush = wb_trap_valid ||
+		(if_id_valid && id_consume &&
+			(id_redirect || id_is_csr || id_is_fence || id_is_sfence_vma));
 
 	word_t mstatus_mtrap_next, mstatus_strap_next, mstatus_mret_next, mstatus_sret_next;
 	logic [1:0] trap_priv_next, mret_priv_next, sret_priv_next;

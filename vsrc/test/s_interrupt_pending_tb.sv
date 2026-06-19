@@ -17,6 +17,7 @@ module s_interrupt_pending_tb
     ibus_resp_t iresp;
     dbus_req_t dreq;
     dbus_resp_t dresp;
+    logic if_flush;
     logic [1:0] priv_mode;
     word_t satp, mstatus;
     logic trint, swint, exint;
@@ -28,6 +29,7 @@ module s_interrupt_pending_tb
         .reset(reset),
         .ireq(ireq),
         .iresp(iresp),
+        .if_flush(if_flush),
         .dreq(dreq),
         .dresp(dresp),
         .priv_mode(priv_mode),

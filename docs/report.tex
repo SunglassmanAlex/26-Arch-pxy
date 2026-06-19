@@ -24,7 +24,7 @@
   \item 保留 Nexys4 上板适配，继续使用非 Basys3 开发板配置。
   \item 保留 Lab5 的 Sv39 MMU、2 MiB/1 GiB hugepage 支持、特权级和 Lab6 异常中断实现。
   \item 新增 Lab+ atomic extension：实现 AMO W 系列指令以及 \texttt{LR.W/SC.W}，并接入 difftest atomic event。
-  \item 新增前端性能优化：顺序取指提前发起请求，并为 \texttt{CBusArbiter} 增加 idle fast path，减少固定仲裁空泡。
+  \item 新增前端性能优化：顺序取指提前发起请求、\texttt{CBusArbiter} idle fast path，以及 \texttt{IBusToCBus} 8B 指令行缓冲，减少连续取指空泡。
   \item 新增 PMP/privfull 支持：支持 \texttt{pmpcfg0} 中 8 个 PMP entry 的 \texttt{OFF/TOR/NA4/NAPOT} 匹配，产生 instruction/load/store access fault，并通过 \texttt{lab+/4} privileged sys-test。
   \item 新增 \texttt{EBREAK} 断点异常支持：SYSTEM/funct12=\texttt{0x001} 触发同步异常 cause 3。
   \item 新增 \texttt{FENCE/FENCE.I} 合法 no-op 支持，提升编译器生成程序的兼容性。
@@ -234,16 +234,31 @@ RISC-V Sv39 的叶子 PTE 中，\texttt{A} 表示 accessed，\texttt{D} 表示 d
 
 原 \texttt{CBusArbiter} 在 idle 状态下不会直接把选中的请求透传到输出总线，因此每个请求都会固定多等一拍。本次改为 idle 且存在请求时，\texttt{oreq} 直接等于当前选中的 \texttt{selected\_req}；如果下游同周期返回 \texttt{last}，仲裁器不进入 busy；如果请求未完成，才锁存 \texttt{index} 并进入 busy。该优化对取指和数据访存都生效。
 
+\subsection{8B 指令行缓冲与 WB 旁路}
+
+现有 CBus/RAM 读响应本身是 64 位宽。原 \texttt{IBusToCBus} 每条 32 位指令都会重新经过 DBus/CBus/MMU 路径，即使下一条指令就在同一个 8B 对齐块的另一半，也会再消耗一次总线请求。本次在 \texttt{IBusToCBus} 中增加一个很小的 8B instruction line buffer：
+
+\begin{itemize}
+  \item miss 时仍按原方式发起 4B instruction request，保持对外请求语义不变。
+  \item 响应到达后缓存 \texttt{\{addr[63:3], 3'b000\}} 对齐的 64 位数据。
+  \item 下一次取指如果命中同一个 8B 行，直接按 \texttt{addr[2]} 返回低/高 32 位，不再访问 CBus。
+  \item trap、跳转、CSR、\texttt{FENCE/FENCE.I} 和 \texttt{SFENCE.VMA} 等会改变取指流或地址翻译状态的指令通过 \texttt{if\_flush} 失效该缓冲。
+\end{itemize}
+
+取指空泡减少后，原本被慢取指掩盖的 load/use 时序风险会暴露出来：WB 本周期写回的寄存器可能被同周期 decode 读取。为此在 \texttt{core} 中补充 WB 到 decode 的简单旁路，当 \texttt{wb\_valid \&\& wb\_wen \&\& wb\_rd == rs1/rs2} 时优先使用 \texttt{wb\_data}。这保证前端加速不会破坏已有 Lab4 这类密集 load/use 程序。
+
+另外尝试过对 JAL/JALR/taken branch 目标同周期提前取指。该路径在功能上保留，只对普通控制流重定向生效；trap/CSR/FENCE/SFENCE 仍走保守 flush。ready-to-run 的几个直线型测试主要受顺序取指和 8B 行缓冲影响，分支目标提前取指收益较小。
+
 \subsection{周期对比}
 
 \begin{center}
-\begin{tabular}{lrrrrr}
+\begin{tabular}{lrrrrrr}
 \toprule
-测试 & 原始周期 & 顺序提前 & 加 fast path & 总减少 & 最终 IPC \\
+测试 & 原始周期 & 顺序提前 & fast path & 8B 缓冲 & 总减少 & 最终 IPC \\
 \midrule
-\texttt{atomicity.bin} & 372 & 317 & 249 & 33.1\% & 0.221 \\
-\texttt{lab1-extra-test.bin} & 185976 & 153201 & 120425 & 35.2\% & 0.272 \\
-\texttt{lab4-test.bin} & 208529 & 177990 & 139050 & 33.3\% & 0.236 \\
+\texttt{atomicity.bin} & 372 & 317 & 249 & 196 & 47.3\% & 0.281 \\
+\texttt{lab1-extra-test.bin} & 185976 & 153201 & 120425 & 93022 & 50.0\% & 0.352 \\
+\texttt{lab4-test.bin} & 208529 & 177990 & 139050 & 110574 & 47.0\% & 0.296 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -251,19 +266,22 @@ RISC-V Sv39 的叶子 PTE 中，\texttt{A} 表示 accessed，\texttt{D} 表示 d
 MicroBench qsort 采样从 7 ms 降到 6 ms。\texttt{lab+/4 TEST=all} 中的 benchmark 结果如下：
 
 \begin{Verbatim}[fontsize=\small]
-CoreMark: 738 ms, 13 Iterations/Sec
-Dhrystone: 1046 ms, 16 Marks
-STREAM Copy/Scale/Add/Triad: 14.5 / 0.9 / 1.8 / 0.8 MB/s
+CoreMark: 583 ms, 17 Iterations/Sec
+Dhrystone: 813 ms, 21 Marks
+STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 \end{Verbatim}
+
+\texttt{TEST=all} 在 sys-test 输出 \texttt{Privileged test finished. Exit with code = 0} 后仍可能保持仿真进程不退出，因此实际运行用 \texttt{timeout} 截断；报告中的 benchmark 和 sys-test 结果均已出现在截断前。
 
 \section{代码修改}
 
 \begin{itemize}
-  \item \texttt{vsrc/src/core.sv}：新增 AMO 解码、AMO 结果计算、reservation 记录；扩展访存状态机；新增 difftest atomic event；新增 \texttt{if\_can\_request}；新增 8-entry PMP 匹配、取指 access fault 注入、load/store access fault；新增 \texttt{fetch\_priv}；新增 \texttt{EBREAK} 解码和 breakpoint exception cause 3；新增 \texttt{FENCE/FENCE.I} 合法 no-op 解码；新增 S-mode、\texttt{SRET}、\texttt{medeleg/mideleg} 委托、S 态 trap CSR 写入；新增委托后的 \texttt{SSIP/STIP/SEIP} pending 镜像，支持 \texttt{swint/trint/exint} 进入 S trap；新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水；输出当前 \texttt{mstatus} 给 MMU 使用。
-  \item \texttt{vsrc/SimTop.sv}：仿真顶层改为实例化 \texttt{SimMemoryWithVirtio}，在原 RAM/CLINT 行为前增加 virtio/simple-block MMIO 拦截。
+  \item \texttt{vsrc/src/core.sv}：新增 AMO 解码、AMO 结果计算、reservation 记录；扩展访存状态机；新增 difftest atomic event；新增 \texttt{if\_can\_request}；新增普通 JAL/JALR/taken branch 目标提前取指、\texttt{if\_flush} 输出和 WB 到 decode 的寄存器旁路；新增 8-entry PMP 匹配、取指 access fault 注入、load/store access fault；新增 \texttt{fetch\_priv}；新增 \texttt{EBREAK} 解码和 breakpoint exception cause 3；新增 \texttt{FENCE/FENCE.I} 合法 no-op 解码；新增 S-mode、\texttt{SRET}、\texttt{medeleg/mideleg} 委托、S 态 trap CSR 写入；新增委托后的 \texttt{SSIP/STIP/SEIP} pending 镜像，支持 \texttt{swint/trint/exint} 进入 S trap；新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水；输出当前 \texttt{mstatus} 给 MMU 使用。
+  \item \texttt{vsrc/SimTop.sv}：仿真顶层改为实例化 \texttt{SimMemoryWithVirtio}，在原 RAM/CLINT 行为前增加 virtio/simple-block MMIO 拦截；显式连接 \texttt{if\_flush}，供取指侧 instruction line buffer 在控制流/地址翻译变化时失效。
+  \item \texttt{vsrc/VTop.sv}、\texttt{vivado/src/with\_delay/soc\_top.sv}：连接 \texttt{if\_flush} 到 \texttt{IBusToCBus}，保持仿真顶层和上板顶层一致。
   \item \texttt{vsrc/include/common.sv}：扩展 CBus/IBus/DBus 响应，增加 \texttt{page\_fault}；扩展 CBus 请求，增加 \texttt{is\_instr} 标记。
   \item \texttt{vsrc/util/MMU.sv}：新增 fault 状态和 PTE 权限检查，不再将无效 PTE 转成物理地址 0；支持 Sv39 canonical 地址检查和巨页 PPN 对齐检查；支持 \texttt{SUM/MXR} 对 S/U 态数据访问和 execute-only 页读取的影响；新增 \texttt{S\_AD\_UPDATE} 状态，支持硬件置 PTE \texttt{A/D} 位。
-  \item \texttt{vsrc/util/IBusToCBus.sv}、\texttt{vsrc/util/DBusToCBus.sv}：传递 \texttt{is\_instr} 与 \texttt{page\_fault}。
+  \item \texttt{vsrc/util/IBusToCBus.sv}、\texttt{vsrc/util/DBusToCBus.sv}：传递 \texttt{is\_instr} 与 \texttt{page\_fault}；\texttt{IBusToCBus} 新增 8B instruction line buffer，命中同一 64 位取指行时直接返回另一条 32 位指令。
   \item \texttt{vsrc/mycpu\_top.sv}、\texttt{vsrc/util/CBusToAXI.sv}、\texttt{vivado/src/with\_delay/soc\_top.sv}：对真实内存响应源固定 \texttt{page\_fault=0}。
   \item \texttt{vsrc/include/csr.sv}：修正 \texttt{SSTATUS\_MASK}，开放 SIE/SPIE/SPP 等 S 态状态位；设置 \texttt{MEDELEG\_MASK/MIDELEG\_MASK}，支持常见异常和 S 级中断委托；新增 \texttt{pmpaddr1} 到 \texttt{pmpaddr7} CSR 地址常量。
   \item \texttt{vsrc/util/CBusArbiter.sv}：idle 状态下直接透传当前请求，同周期完成的请求不再进入 busy。
@@ -285,7 +303,7 @@ make test-labplus-3
 The image is ./ready-to-run/lab+/3/atomicity.bin
 Core 0: HIT GOOD TRAP at pc = 0x800000dc
 total guest instructions = 55
-instrCnt = 55, cycleCnt = 249
+instrCnt = 55, cycleCnt = 196
 \end{Verbatim}
 
 \subsection{Lab+ privfull/PMP}
@@ -317,11 +335,11 @@ Exit with code = 0
 \begin{Verbatim}[fontsize=\small]
 Lab1 extra:
 Core 0: HIT GOOD TRAP at pc = 0x8002001c
-instrCnt = 32775, cycleCnt = 120425
+instrCnt = 32775, cycleCnt = 93022
 
 Lab4:
 Core 0: HIT GOOD TRAP at pc = 0x8001fff8
-instrCnt = 32766, cycleCnt = 139050
+instrCnt = 32766, cycleCnt = 110574
 
 Lab5:
 xv6 kernel is booting
@@ -346,7 +364,7 @@ Exit with code = 0
 \begin{Verbatim}[fontsize=\small]
 make test-labplus-3
 Core 0: HIT GOOD TRAP at pc = 0x800000dc
-instrCnt = 55, cycleCnt = 249
+instrCnt = 55, cycleCnt = 196
 
 Lab5 kernel:
 Return from init! Test passed
@@ -405,14 +423,14 @@ simple virtio block MMIO test passed.
 \begin{itemize}
   \item 完整 virtio descriptor/avail/used ring，或从 \texttt{fs.img} 加载初始 disk 内容。
   \item 更完整的 PLIC claim/complete、优先级和 enable/pending 寄存器模型。
-  \item cache、分支预测或多级流水线，用于进一步提升 \texttt{test-labplus-2} 性能。
+  \item 更完整的 I-cache/分支预测或多级流水线，用于进一步提升 \texttt{test-labplus-2} 性能。
 \end{itemize}
 
-这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 8-entry PMP、atomic 和前端空泡优化，因此本次没有继续扩大范围。
+这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 8-entry PMP、atomic、virtio 简化模型和前端空泡优化，因此本次没有继续扩大范围。
 
 \section{总结}
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I} 兼容，并加入两项轻量性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、\texttt{SUM/MXR} 权限补充、PTE A/D 位硬件更新、简化 virtio/disk MMIO，以及独立 MMU page fault、S interrupt 和 simple-block 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 120425，将 Lab4 周期数从 208529 降到 139050。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I} 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、\texttt{SUM/MXR} 权限补充、PTE A/D 位硬件更新、简化 virtio/disk MMIO，以及独立 MMU page fault、S interrupt 和 simple-block 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 196。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 \section{AI 使用说明}
 

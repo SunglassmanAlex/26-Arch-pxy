@@ -27,6 +27,7 @@ module SimTop import common::*;(
     cbus_resp_t oresp, cpu_oresp;
     /* verilator lint_on UNOPTFLAT */
     logic trint, swint, exint;
+    logic if_flush;
     logic [1:0] priv_mode;
     word_t satp, mstatus;
 
@@ -38,12 +39,14 @@ module SimTop import common::*;(
     cbus_resp_t icresp, dcresp;
 
     core core(
-      .clk(clock), .reset, .ireq, .iresp, .dreq, .dresp,
+      .clk(clock), .reset, .ireq, .iresp, .if_flush, .dreq, .dresp,
       .priv_mode(priv_mode), .satp(satp), .mstatus(mstatus),
       .trint, .swint, .exint
     );
 
-    IBusToCBus icvt(.*);
+    IBusToCBus icvt(
+        .clk(clock), .reset, .ireq, .iresp, .if_flush, .icreq, .icresp
+    );
     DBusToCBus dcvt(.*);
     CBusArbiter mux(
         .clk(clock), .reset,

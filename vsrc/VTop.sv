@@ -28,6 +28,7 @@ module VTop
     cbus_resp_t icresp, dcresp;
     cbus_req_t  cpu_oreq;
     cbus_resp_t cpu_oresp;
+    logic if_flush;
     logic [1:0] priv_mode;
     word_t satp, mstatus;
 

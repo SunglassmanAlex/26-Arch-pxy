@@ -33,6 +33,7 @@ module mycpu_top_single
 	cbus_req_t  cpu_oreq;
 	cbus_resp_t cpu_oresp;
 	logic trint, swint, exint;
+	logic if_flush;
 	logic [1:0] priv_mode;
 	word_t satp, mstatus;
 
@@ -52,6 +53,7 @@ module mycpu_top_single
 		.reset(reset),
 		.ireq(ireq),
 		.iresp(iresp),
+		.if_flush(if_flush),
 		.dreq(dreq),
 		.dresp(dresp),
 		.priv_mode(priv_mode),
@@ -65,6 +67,9 @@ module mycpu_top_single
 	IBusToCBus icvt(
 		.ireq(ireq),
 		.iresp(iresp),
+		.if_flush(if_flush),
+		.clk(clk),
+		.reset(reset),
 		.icreq(icreq),
 		.icresp(icresp)
 	);
