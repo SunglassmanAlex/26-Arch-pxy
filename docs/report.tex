@@ -327,7 +327,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   \item \texttt{vsrc/SimTop.sv}：将仿真 UART TX/RX 端口接到 difftest 顶层 \texttt{io\_uart\_out\_valid/io\_uart\_out\_ch/io\_uart\_in\_*}。
   \item \texttt{vsrc/test/plic\_mmio\_tb.sv}：新增 PLIC MMIO 定向测试，覆盖 priority、pending、M/S enable、M/S threshold、claim/complete，以及 virtio source 1 中断注入。
   \item \texttt{vsrc/test/uart\_mmio\_tb.sv}：新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
-  \item \texttt{vsrc/test/simple\_virtio\_block\_tb.sv}、\texttt{vsrc/test/ram\_dpi\_stubs.cpp}：新增 simple-block MMIO 定向测试和 RAM DPI stub，验证镜像初始化、512B sector write/read。
+  \item \texttt{vsrc/test/simple\_virtio\_block\_tb.sv}、\texttt{vsrc/test/ram\_dpi\_stubs.cpp}：新增 simple-block MMIO 定向测试和 RAM DPI stub，验证镜像初始化、未知命令/越界 sector 错误状态、512B sector write/read。
   \item \texttt{Makefile}：新增 \texttt{test-labplus-2}、\texttt{test-labplus-3}、\texttt{test-labplus-4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart} 和 \texttt{test-labplus-virtio}。
   \item \texttt{ready-to-run/lab+/}：补充官方 Lab+ 测试二进制和汇编反汇编文件。
 \end{itemize}
@@ -593,12 +593,14 @@ simple_block_capacity [OK]
 simple_block_sector_size [OK]
 simple_block_image_read_status [OK]
 simple_block_image_read_data [OK]
+simple_block_unknown_cmd_status [OK]
+simple_block_oob_status [OK]
 simple_block_write_status [OK]
 simple_block_read_status [OK]
 simple virtio block MMIO test passed.
 \end{Verbatim}
 
-测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 \texttt{+simple\_blk\_image=build/simple-virtio/simple-blk.img} 传给模型；reset 后读取 virtio magic/version/device/vendor 和 simple-block 容量寄存器；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；再通过 DPI RAM stub 在 RAM 中布置 512B pattern，向设备写 sector/mem/cmd=write；清空 RAM 后执行 cmd=read；最后逐 word 检查 RAM 中 512B 数据被恢复。
+测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 \texttt{+simple\_blk\_image=build/simple-virtio/simple-blk.img} 传给模型；reset 后读取 virtio magic/version/device/vendor 和 simple-block 容量寄存器；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 \texttt{cmd=99} 检查 \texttt{status=1}，再访问越界 \texttt{sector=16} 检查 \texttt{status=2}；最后通过 DPI RAM stub 在 RAM 中布置 512B pattern，向设备写 sector/mem/cmd=write，清空 RAM 后执行 cmd=read，并逐 word 检查 RAM 中 512B 数据被恢复。
 
 \section{后续可做项}
 

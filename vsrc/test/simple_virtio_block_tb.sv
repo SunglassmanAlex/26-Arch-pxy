@@ -149,6 +149,13 @@ module simple_virtio_block_tb
         end
         $display("simple_block_image_read_data [OK]");
 
+        cbus_write(VIRTIO_BASE + 64'h100, 64'd5);
+        cbus_write(VIRTIO_BASE + 64'h110, 64'd99);
+        expect_read(VIRTIO_BASE + 64'h118, 64'd1, "simple_block_unknown_cmd_status");
+        cbus_write(VIRTIO_BASE + 64'h100, 64'd16);
+        cbus_write(VIRTIO_BASE + 64'h110, 64'd1);
+        expect_read(VIRTIO_BASE + 64'h118, 64'd2, "simple_block_oob_status");
+
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(DMA_ADDR + 64'(word_idx * 8), pattern(word_idx));
         end

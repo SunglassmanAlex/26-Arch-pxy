@@ -370,7 +370,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/uart_mmio_tb.sv`
   - 新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
 - `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
-  - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、512B sector write/read。
+  - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、未知命令/越界 sector 错误状态、512B sector write/read。
 - `Makefile`
   - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-plic`、`test-labplus-uart` 和 `test-labplus-virtio`。
 - `ready-to-run/lab+/`
@@ -712,12 +712,14 @@ simple_block_capacity [OK]
 simple_block_sector_size [OK]
 simple_block_image_read_status [OK]
 simple_block_image_read_data [OK]
+simple_block_unknown_cmd_status [OK]
+simple_block_oob_status [OK]
 simple_block_write_status [OK]
 simple_block_read_status [OK]
 simple virtio block MMIO test passed.
 ```
 
-测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 `+simple_blk_image=build/simple-virtio/simple-blk.img` 传给模型；reset 后读取 virtio magic/version/device/vendor 和 simple-block 容量寄存器；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；再通过 DPI RAM stub 在 RAM 中布置 512B pattern，向设备写 sector/mem/cmd=write；清空 RAM 后执行 cmd=read；最后逐 word 检查 RAM 中 512B 数据被恢复。
+测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 `+simple_blk_image=build/simple-virtio/simple-blk.img` 传给模型；reset 后读取 virtio magic/version/device/vendor 和 simple-block 容量寄存器；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 `cmd=99` 检查 `status=1`，再访问越界 `sector=16` 检查 `status=2`；最后通过 DPI RAM stub 在 RAM 中布置 512B pattern，向设备写 sector/mem/cmd=write，清空 RAM 后执行 cmd=read，并逐 word 检查 RAM 中 512B 数据被恢复。
 
 ## 8. 后续可做项
 
