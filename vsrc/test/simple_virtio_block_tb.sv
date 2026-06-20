@@ -13,10 +13,12 @@ module simple_virtio_block_tb
     localparam addr_t VQ_REQ_ADDR = 64'h0000_0000_8000_2300;
     localparam addr_t VQ_BUF_ADDR = 64'h0000_0000_8000_2400;
     localparam addr_t VQ_STATUS_ADDR = 64'h0000_0000_8000_2600;
+    localparam addr_t VQ_INDIRECT_ADDR = 64'h0000_0000_8000_2700;
     localparam word_t MAGIC_VERSION = {32'd2, 32'h7472_6976};
     localparam word_t DEVICE_VENDOR = {32'h554d_4551, 32'd2};
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
     localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
+    localparam u16 VIRTQ_DESC_F_INDIRECT = 16'h0004;
     localparam string SIMPLE_BLK_IMAGE_PATH = "build/simple-virtio/simple-blk.img";
 
     logic clk, reset;
@@ -237,7 +239,8 @@ module simple_virtio_block_tb
         $display("%s [OK]", name);
     endtask
 
-    task automatic write_desc(
+    task automatic write_desc_at(
+        input addr_t table_base,
         input int index,
         input addr_t desc_addr,
         input u32 desc_len,
@@ -246,12 +249,22 @@ module simple_virtio_block_tb
     );
         addr_t base;
         begin
-            base = VQ_DESC_ADDR + 64'(index) * 64'd16;
+            base = table_base + 64'(index) * 64'd16;
             ram_write_u64(base, desc_addr);
             ram_write_u32(base + 64'd8, desc_len);
             ram_write_u16(base + 64'd12, desc_flags);
             ram_write_u16(base + 64'd14, desc_next);
         end
+    endtask
+
+    task automatic write_desc(
+        input int index,
+        input addr_t desc_addr,
+        input u32 desc_len,
+        input u16 desc_flags,
+        input u16 desc_next
+    );
+        write_desc_at(VQ_DESC_ADDR, index, desc_addr, desc_len, desc_flags, desc_next);
     endtask
 
     task automatic write_blk_request(input u32 req_type, input word_t sector);
@@ -405,6 +418,37 @@ module simple_virtio_block_tb
             end
         end
         $display("virtio_queue_write_data [OK]");
+
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            ram_write_word(VQ_BUF_ADDR + 64'(word_idx * 8), 64'd0);
+        end
+        write_blk_request(32'd0, 64'd7);
+        ram_write_byte(VQ_STATUS_ADDR, 8'hff);
+        write_desc_at(VQ_INDIRECT_ADDR, 0, VQ_REQ_ADDR, 32'd16, VIRTQ_DESC_F_NEXT, 16'd1);
+        write_desc_at(
+            VQ_INDIRECT_ADDR, 1, VQ_BUF_ADDR, 32'd512,
+            VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 16'd2
+        );
+        write_desc_at(VQ_INDIRECT_ADDR, 2, VQ_STATUS_ADDR, 32'd1, VIRTQ_DESC_F_WRITE, 16'd0);
+        write_desc(3, VQ_INDIRECT_ADDR, 32'd48, VIRTQ_DESC_F_INDIRECT, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd8, 16'd3);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd3);
+        cbus_write32(VIRTIO_BASE + 64'h050, 32'd0);
+        expect_ram_byte(VQ_STATUS_ADDR, 8'd0, "virtio_queue_indirect_read_status");
+        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd3, "virtio_queue_indirect_used_idx");
+        expect_ram_u32(VQ_USED_ADDR + 64'd20, 32'd3, "virtio_queue_indirect_used_id");
+        expect_ram_u32(VQ_USED_ADDR + 64'd24, 32'd513, "virtio_queue_indirect_used_len");
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd1, "virtio_queue_indirect_interrupt_status");
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            word_t data;
+            data = ram_read_word(VQ_BUF_ADDR + 64'(word_idx * 8));
+            if (data !== image_pattern(7 * 64 + word_idx)) begin
+                $fatal(1, "virtqueue indirect word %0d read %h expected %h",
+                    word_idx, data, image_pattern(7 * 64 + word_idx));
+            end
+        end
+        $display("virtio_queue_indirect_read_data [OK]");
+        cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
 
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(DMA_ADDR + 64'(word_idx * 8), pattern(word_idx));

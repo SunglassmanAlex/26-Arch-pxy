@@ -36,6 +36,7 @@ module SimMemoryWithVirtio
     localparam int VIRTQ_NUM_MAX = 8;
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
     localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
+    localparam u16 VIRTQ_DESC_F_INDIRECT = 16'h0004;
     localparam u32 VIRTIO_MMIO_INT_VRING = 32'h0000_0001;
     localparam u32 VIRTIO_BLK_T_IN = 32'd0;
     localparam u32 VIRTIO_BLK_T_OUT = 32'd1;
@@ -624,7 +625,8 @@ module SimMemoryWithVirtio
         end
     endtask
 
-    task automatic read_virtq_desc(
+    task automatic read_virtq_desc_from(
+        input addr_t table_base,
         input u16 index,
         output addr_t desc_addr,
         output u32 desc_len,
@@ -633,12 +635,22 @@ module SimMemoryWithVirtio
     );
         addr_t base;
         begin
-            base = virt_queue_desc + 64'(index) * 64'd16;
+            base = table_base + 64'(index) * 64'd16;
             desc_addr = ram_read_u64_addr(base);
             desc_len = ram_read_u32_addr(base + 64'd8);
             desc_flags = ram_read_u16_addr(base + 64'd12);
             desc_next = ram_read_u16_addr(base + 64'd14);
         end
+    endtask
+
+    task automatic read_virtq_desc(
+        input u16 index,
+        output addr_t desc_addr,
+        output u32 desc_len,
+        output u16 desc_flags,
+        output u16 desc_next
+    );
+        read_virtq_desc_from(virt_queue_desc, index, desc_addr, desc_len, desc_flags, desc_next);
     endtask
 
     task automatic complete_virtqueue_request(input u16 head, input u32 used_len);
@@ -666,12 +678,16 @@ module SimMemoryWithVirtio
         u32 desc0_len, desc1_len, desc2_len;
         u16 desc0_flags, desc1_flags, desc2_flags;
         u16 desc0_next, desc1_next, desc2_next;
+        addr_t desc_table_base;
+        u32 indirect_len;
+        u16 desc_table_entries;
         u32 req_type;
         word_t req_sector;
         u8 status;
         u32 used_len;
         int disk_base_word;
         word_t write_word;
+        logic status_desc_valid;
         begin
             if ((queue_notify != 32'd0) || (virt_queue_sel != 32'd0) ||
                 (virt_queue_ready == 32'd0) || (virt_queue_num == 32'd0) ||
@@ -691,19 +707,51 @@ module SimMemoryWithVirtio
             end
 
             read_virtq_desc(head, desc0_addr, desc0_len, desc0_flags, desc0_next);
-            read_virtq_desc(desc0_next, desc1_addr, desc1_len, desc1_flags, desc1_next);
-            read_virtq_desc(desc1_next, desc2_addr, desc2_len, desc2_flags, desc2_next);
+            desc_table_base = virt_queue_desc;
+            desc_table_entries = u16'(virt_queue_num[15:0]);
+            if ((desc0_flags & VIRTQ_DESC_F_INDIRECT) == VIRTQ_DESC_F_INDIRECT) begin
+                desc_table_base = desc0_addr;
+                indirect_len = desc0_len;
+                desc_table_entries = u16'(indirect_len >> 4);
+                if ((indirect_len < 32'd48) || (indirect_len[3:0] != 4'd0)) begin
+                    desc_table_entries = 16'd0;
+                end
+                else begin
+                    read_virtq_desc_from(desc_table_base, 16'd0,
+                        desc0_addr, desc0_len, desc0_flags, desc0_next);
+                end
+            end
+            if (desc0_next < desc_table_entries) begin
+                read_virtq_desc_from(desc_table_base, desc0_next,
+                    desc1_addr, desc1_len, desc1_flags, desc1_next);
+            end
+            else begin
+                desc1_addr = 64'd0;
+                desc1_len = 32'd0;
+                desc1_flags = 16'd0;
+                desc1_next = 16'd0;
+            end
+            if (desc1_next < desc_table_entries) begin
+                read_virtq_desc_from(desc_table_base, desc1_next,
+                    desc2_addr, desc2_len, desc2_flags, desc2_next);
+            end
+            else begin
+                desc2_addr = 64'd0;
+                desc2_len = 32'd0;
+                desc2_flags = 16'd0;
+                desc2_next = 16'd0;
+            end
             req_type = ram_read_u32_addr(desc0_addr);
             req_sector = ram_read_u64_addr(desc0_addr + 64'd8);
             status = VIRTIO_BLK_S_IOERR;
             used_len = 32'd1;
+            status_desc_valid = (desc2_len >= 32'd1) &&
+                ((desc2_flags & VIRTQ_DESC_F_WRITE) == VIRTQ_DESC_F_WRITE);
 
             if (((desc0_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
                 ((desc1_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
-                (desc0_next >= u16'(virt_queue_num[15:0])) ||
-                (desc1_next >= u16'(virt_queue_num[15:0])) ||
                 (desc0_len < 32'd16) || (desc1_len < 32'd512) || (desc2_len < 32'd1) ||
-                ((desc2_flags & VIRTQ_DESC_F_WRITE) == 16'd0) ||
+                !status_desc_valid ||
                 (req_sector >= 64'(SIMPLE_BLK_SECTORS))) begin
                 status = VIRTIO_BLK_S_IOERR;
             end
@@ -746,7 +794,9 @@ module SimMemoryWithVirtio
                 status = VIRTIO_BLK_S_UNSUPP;
             end
 
-            ram_write_byte_addr(desc2_addr, status);
+            if (status_desc_valid) begin
+                ram_write_byte_addr(desc2_addr, status);
+            end
             blk_status <= {56'd0, status};
             complete_virtqueue_request(head, used_len);
         end
