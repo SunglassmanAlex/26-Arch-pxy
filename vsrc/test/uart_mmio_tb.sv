@@ -177,6 +177,15 @@ module uart_mmio_tb
         $display("%s [OK]", name);
     endtask
 
+    task automatic expect_uart_in_valid(input logic expected, input string name);
+        @(posedge clk);
+        #1;
+        if (uart_in_valid !== expected) begin
+            $fatal(1, "%s uart_in_valid=%b expected %b", name, uart_in_valid, expected);
+        end
+        $display("%s [OK]", name);
+    endtask
+
     task automatic inject_rx(input u8 data, input string name);
         if (!uart_in_valid) begin
             $fatal(1, "%s uart_in_valid is low", name);
@@ -188,6 +197,23 @@ module uart_mmio_tb
         @(posedge clk);
         #1;
         $display("%s [OK]", name);
+    endtask
+
+    task automatic force_rx(input u8 data, input string name);
+        uart_in_ch = data;
+        @(posedge clk);
+        #1;
+        uart_in_ch = 8'hff;
+        @(posedge clk);
+        #1;
+        $display("%s [OK]", name);
+    endtask
+
+    task automatic fill_rx_fifo(input u8 base, input string name);
+        for (int i = 0; i < 16; i += 1) begin
+            inject_rx(u8'(base + i[7:0]), $sformatf("%s_%0d", name, i));
+        end
+        expect_uart_in_valid(1'b0, {name, "_backpressure"});
     endtask
 
     initial begin
@@ -243,6 +269,30 @@ module uart_mmio_tb
         expect8(UART_IIR_FCR, 8'h01, "uart_iir_fifo_empty");
         expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_fifo_claim");
         write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_fifo_complete");
+        write8(UART_IIR_FCR, 8'h41, 1'b0, 8'd0, "uart_fcr_trigger4");
+        inject_rx(8'h50, "uart_rx_trigger4_inject_0");
+        inject_rx(8'h51, "uart_rx_trigger4_inject_1");
+        inject_rx(8'h52, "uart_rx_trigger4_inject_2");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_below_trigger4");
+        expect_exint(1'b0, "plic_uart_below_trigger4");
+        inject_rx(8'h53, "uart_rx_trigger4_inject_3");
+        expect8(UART_IIR_FCR, 8'h04, "uart_iir_reaches_trigger4");
+        expect_exint(1'b1, "plic_uart_reaches_trigger4");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_trigger4_claim");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_trigger4_complete");
+        write8(UART_IIR_FCR, 8'h43, 1'b0, 8'd0, "uart_fcr_clear_rx_fifo");
+        expect8(UART_LSR, 8'h60, "uart_lsr_after_fcr_clear");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_after_fcr_clear");
+        write8(UART_IER_DLM, 8'h05, 1'b0, 8'd0, "uart_ier_enable_line_status");
+        write8(UART_IIR_FCR, 8'h03, 1'b0, 8'd0, "uart_fcr_trigger1_clear");
+        fill_rx_fifo(8'h80, "uart_rx_fill_fifo");
+        force_rx(8'hf0, "uart_rx_force_overrun");
+        expect8(UART_IIR_FCR, 8'h06, "uart_iir_overrun_priority");
+        expect8(UART_LSR, 8'he3, "uart_lsr_overrun");
+        expect8(UART_LSR, 8'h61, "uart_lsr_overrun_cleared");
+        write8(UART_IIR_FCR, 8'h03, 1'b0, 8'd0, "uart_fcr_clear_overrun_fifo");
+        expect8(UART_LSR, 8'h60, "uart_lsr_overrun_fifo_cleared");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_overrun_fifo_cleared");
 
         $display("UART MMIO directed tests passed.");
         $finish;

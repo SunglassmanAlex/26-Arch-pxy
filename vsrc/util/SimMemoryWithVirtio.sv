@@ -51,12 +51,13 @@ module SimMemoryWithVirtio
     logic [PLIC_SOURCES:0] plic_pending, plic_enable_m, plic_enable_s;
     logic [PLIC_SOURCES:0] plic_claim_clear_mask;
     word_t plic_threshold_m, plic_threshold_s;
-    u8 uart_ier, uart_lcr, uart_mcr, uart_scr, uart_dll, uart_dlm;
+    u8 uart_ier, uart_fcr, uart_lcr, uart_mcr, uart_scr, uart_dll, uart_dlm;
     u8 uart_rx_fifo [UART_RX_FIFO_DEPTH];
     logic [UART_RX_FIFO_INDEX_BITS-1:0] uart_rx_head, uart_rx_tail;
-    logic [UART_RX_FIFO_COUNT_BITS-1:0] uart_rx_count;
+    logic [UART_RX_FIFO_COUNT_BITS-1:0] uart_rx_count, uart_rx_count_next;
     logic uart_rx_valid, uart_rx_full;
-    logic uart_rx_pop_req, uart_rx_pop_valid, uart_rx_push_req;
+    logic uart_rx_pop_req, uart_rx_pop_valid, uart_rx_push_req, uart_rx_overrun_req;
+    logic uart_lsr_overrun, uart_lsr_read_req, uart_rx_irq_active, uart_rx_irq_next_active;
 
     RAMHelper2 ram(
         .clk(clk),
@@ -72,7 +73,39 @@ module SimMemoryWithVirtio
     assign uart_rx_valid = (uart_rx_count != '0);
     assign uart_rx_full = (uart_rx_count == UART_RX_FIFO_COUNT_BITS'(UART_RX_FIFO_DEPTH));
     assign uart_in_valid = !uart_rx_full;
-    assign uart_rx_push_req = (uart_in_ch != 8'hff) && !uart_rx_full;
+    assign uart_rx_push_req = (uart_in_ch != 8'hff) && (!uart_rx_full || uart_rx_pop_valid);
+    assign uart_rx_overrun_req = (uart_in_ch != 8'hff) && uart_rx_full && !uart_rx_pop_valid;
+
+    function automatic logic uart_rx_threshold_met_for(
+        input logic [1:0] trigger,
+        input logic [UART_RX_FIFO_COUNT_BITS-1:0] count
+    );
+        unique case (trigger)
+            2'b00: uart_rx_threshold_met_for = (count >= UART_RX_FIFO_COUNT_BITS'(1));
+            2'b01: uart_rx_threshold_met_for = (count >= UART_RX_FIFO_COUNT_BITS'(4));
+            2'b10: uart_rx_threshold_met_for = (count >= UART_RX_FIFO_COUNT_BITS'(8));
+            2'b11: uart_rx_threshold_met_for = (count >= UART_RX_FIFO_COUNT_BITS'(14));
+            default: uart_rx_threshold_met_for = 1'b0;
+        endcase
+    endfunction
+
+    function automatic logic uart_rx_threshold_met(
+        input logic [UART_RX_FIFO_COUNT_BITS-1:0] count
+    );
+        uart_rx_threshold_met = uart_rx_threshold_met_for(uart_fcr[7:6], count);
+    endfunction
+
+    always_comb begin
+        uart_rx_count_next = uart_rx_count;
+        unique case ({uart_rx_push_req, uart_rx_pop_valid})
+            2'b10: uart_rx_count_next = uart_rx_count + 1'b1;
+            2'b01: uart_rx_count_next = uart_rx_count - 1'b1;
+            default: begin end
+        endcase
+    end
+
+    assign uart_rx_irq_active = uart_ier[0] && uart_rx_threshold_met(uart_rx_count);
+    assign uart_rx_irq_next_active = uart_ier[0] && uart_rx_threshold_met(uart_rx_count_next);
 
     function automatic logic is_uart_addr(input addr_t addr);
         is_uart_addr = (addr >= UART_BASE) && (addr < UART_END);
@@ -125,10 +158,13 @@ module SimMemoryWithVirtio
                 3'h0: uart_reg_read_byte = dlab ? uart_dll :
                     (uart_rx_valid ? uart_rx_fifo[uart_rx_head] : 8'd0);
                 3'h1: uart_reg_read_byte = dlab ? uart_dlm : uart_ier;
-                3'h2: uart_reg_read_byte = (uart_rx_valid && uart_ier[0]) ? 8'h04 : 8'h01;
+                3'h2: uart_reg_read_byte = (uart_lsr_overrun && uart_ier[2]) ? 8'h06 :
+                    (uart_rx_irq_active ? 8'h04 : 8'h01);
                 3'h3: uart_reg_read_byte = uart_lcr;
                 3'h4: uart_reg_read_byte = uart_mcr;
-                3'h5: uart_reg_read_byte = {1'b0, 2'b11, 4'b0000, uart_rx_valid};
+                3'h5: uart_reg_read_byte = {
+                    uart_lsr_overrun, 2'b11, 3'b000, uart_lsr_overrun, uart_rx_valid
+                };
                 3'h6: uart_reg_read_byte = 8'd0;
                 3'h7: uart_reg_read_byte = uart_scr;
                 default: uart_reg_read_byte = 8'd0;
@@ -168,12 +204,25 @@ module SimMemoryWithVirtio
                     end
                     else begin
                         uart_ier <= data;
-                        if (data[0] && uart_rx_valid) begin
+                        if ((data[0] && uart_rx_threshold_met(uart_rx_count)) ||
+                            (data[2] && uart_lsr_overrun)) begin
                             plic_pending[PLIC_UART_SOURCE] <= 1'b1;
                         end
                     end
                 end
-                3'h2: begin end
+                3'h2: begin
+                    uart_fcr <= data;
+                    if (data[1]) begin
+                        uart_rx_head <= '0;
+                        uart_rx_tail <= '0;
+                        uart_rx_count <= '0;
+                        uart_lsr_overrun <= 1'b0;
+                    end
+                    else if (uart_ier[0] &&
+                        uart_rx_threshold_met_for(data[7:6], uart_rx_count)) begin
+                        plic_pending[PLIC_UART_SOURCE] <= 1'b1;
+                    end
+                end
                 3'h3: uart_lcr <= data;
                 3'h4: uart_mcr <= data;
                 3'h7: uart_scr <= data;
@@ -217,9 +266,27 @@ module SimMemoryWithVirtio
         end
     endfunction
 
+    function automatic logic uart_read_touches_lsr(input addr_t addr, input msize_t size);
+        addr_t aligned_addr;
+        strobe_t read_mask;
+        begin
+            aligned_addr = {addr[63:3], 3'b000};
+            read_mask = size_strobe(size, addr[2:0]);
+            uart_read_touches_lsr = 1'b0;
+            for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+                if (read_mask[byte_idx] &&
+                    (((aligned_addr + 64'(byte_idx) - UART_BASE) & 64'h7) == 64'h5)) begin
+                    uart_read_touches_lsr = 1'b1;
+                end
+            end
+        end
+    endfunction
+
     assign uart_rx_pop_req = oreq.valid && is_uart_addr(oreq.addr) &&
         !oreq.is_write && uart_read_pops_rx(oreq.addr, oreq.size);
     assign uart_rx_pop_valid = uart_rx_pop_req && uart_rx_valid;
+    assign uart_lsr_read_req = oreq.valid && is_uart_addr(oreq.addr) &&
+        !oreq.is_write && uart_read_touches_lsr(oreq.addr, oreq.size);
 
     function automatic u32 plic_pending_word();
         plic_pending_word = '0;
@@ -511,6 +578,7 @@ module SimMemoryWithVirtio
             uart_out_valid <= 1'b0;
             uart_out_ch <= 8'd0;
             uart_ier <= 8'd0;
+            uart_fcr <= 8'd0;
             uart_lcr <= 8'd0;
             uart_mcr <= 8'd0;
             uart_scr <= 8'd0;
@@ -519,6 +587,7 @@ module SimMemoryWithVirtio
             uart_rx_head <= '0;
             uart_rx_tail <= '0;
             uart_rx_count <= '0;
+            uart_lsr_overrun <= 1'b0;
             for (int source_idx = 0; source_idx <= PLIC_SOURCES; source_idx += 1) begin
                 plic_priority[source_idx] <= 64'd0;
             end
@@ -534,21 +603,26 @@ module SimMemoryWithVirtio
             end
             plic_claim_clear_mask <= '0;
             uart_out_valid <= 1'b0;
+            if (uart_lsr_read_req) begin
+                uart_lsr_overrun <= 1'b0;
+            end
             if (uart_rx_pop_valid) begin
                 uart_rx_head <= uart_rx_head + 1'b1;
             end
             if (uart_rx_push_req) begin
                 uart_rx_fifo[uart_rx_tail] <= uart_in_ch;
                 uart_rx_tail <= uart_rx_tail + 1'b1;
-                if (uart_ier[0]) begin
+                if (uart_rx_irq_next_active) begin
                     plic_pending[PLIC_UART_SOURCE] <= 1'b1;
                 end
             end
-            unique case ({uart_rx_push_req, uart_rx_pop_valid})
-                2'b10: uart_rx_count <= uart_rx_count + 1'b1;
-                2'b01: uart_rx_count <= uart_rx_count - 1'b1;
-                default: begin end
-            endcase
+            if (uart_rx_overrun_req) begin
+                uart_lsr_overrun <= 1'b1;
+                if (uart_ier[2]) begin
+                    plic_pending[PLIC_UART_SOURCE] <= 1'b1;
+                end
+            end
+            uart_rx_count <= uart_rx_count_next;
             if (!(oreq.valid && is_local_addr(oreq.addr))) begin
                 local_req_active <= 1'b0;
             end
