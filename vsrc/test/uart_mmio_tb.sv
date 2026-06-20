@@ -233,6 +233,16 @@ module uart_mmio_tb
         expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_claim");
         expect_exint(1'b0, "plic_uart_claim_clears_exint");
         write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_complete");
+        inject_rx(8'h43, "uart_rx_fifo_inject_C");
+        inject_rx(8'h44, "uart_rx_fifo_inject_D");
+        expect8(UART_RBR_THR_DLL, 8'h43, "uart_rx_fifo_read_C");
+        expect8(UART_LSR, 8'h61, "uart_lsr_fifo_still_ready");
+        expect8(UART_IIR_FCR, 8'h04, "uart_iir_fifo_still_pending");
+        expect8(UART_RBR_THR_DLL, 8'h44, "uart_rx_fifo_read_D");
+        expect8(UART_LSR, 8'h60, "uart_lsr_fifo_empty");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_fifo_empty");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_fifo_claim");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_fifo_complete");
 
         $display("UART MMIO directed tests passed.");
         $finish;

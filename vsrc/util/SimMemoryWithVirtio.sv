@@ -36,6 +36,9 @@ module SimMemoryWithVirtio
     localparam int SIMPLE_BLK_SECTORS = 16;
     localparam int SIMPLE_BLK_WORDS_PER_SECTOR = 64;
     localparam int SIMPLE_BLK_WORDS = SIMPLE_BLK_SECTORS * SIMPLE_BLK_WORDS_PER_SECTOR;
+    localparam int UART_RX_FIFO_DEPTH = 16;
+    localparam int UART_RX_FIFO_INDEX_BITS = $clog2(UART_RX_FIFO_DEPTH);
+    localparam int UART_RX_FIFO_COUNT_BITS = $clog2(UART_RX_FIFO_DEPTH + 1);
 
     cbus_req_t ram_req;
     cbus_resp_t ram_resp;
@@ -49,8 +52,11 @@ module SimMemoryWithVirtio
     logic [PLIC_SOURCES:0] plic_claim_clear_mask;
     word_t plic_threshold_m, plic_threshold_s;
     u8 uart_ier, uart_lcr, uart_mcr, uart_scr, uart_dll, uart_dlm;
-    logic uart_rx_valid;
-    u8 uart_rx_ch;
+    u8 uart_rx_fifo [UART_RX_FIFO_DEPTH];
+    logic [UART_RX_FIFO_INDEX_BITS-1:0] uart_rx_head, uart_rx_tail;
+    logic [UART_RX_FIFO_COUNT_BITS-1:0] uart_rx_count;
+    logic uart_rx_valid, uart_rx_full;
+    logic uart_rx_pop_req, uart_rx_pop_valid, uart_rx_push_req;
 
     RAMHelper2 ram(
         .clk(clk),
@@ -63,7 +69,10 @@ module SimMemoryWithVirtio
     );
 
     assign exint = ram_exint || plic_irq_m || plic_irq_s;
-    assign uart_in_valid = !uart_rx_valid;
+    assign uart_rx_valid = (uart_rx_count != '0);
+    assign uart_rx_full = (uart_rx_count == UART_RX_FIFO_COUNT_BITS'(UART_RX_FIFO_DEPTH));
+    assign uart_in_valid = !uart_rx_full;
+    assign uart_rx_push_req = (uart_in_ch != 8'hff) && !uart_rx_full;
 
     function automatic logic is_uart_addr(input addr_t addr);
         is_uart_addr = (addr >= UART_BASE) && (addr < UART_END);
@@ -113,7 +122,8 @@ module SimMemoryWithVirtio
             offset = u8'(addr - UART_BASE);
             dlab = uart_lcr[7];
             unique case (offset[2:0])
-                3'h0: uart_reg_read_byte = dlab ? uart_dll : uart_rx_ch;
+                3'h0: uart_reg_read_byte = dlab ? uart_dll :
+                    (uart_rx_valid ? uart_rx_fifo[uart_rx_head] : 8'd0);
                 3'h1: uart_reg_read_byte = dlab ? uart_dlm : uart_ier;
                 3'h2: uart_reg_read_byte = (uart_rx_valid && uart_ier[0]) ? 8'h04 : 8'h01;
                 3'h3: uart_reg_read_byte = uart_lcr;
@@ -184,29 +194,32 @@ module SimMemoryWithVirtio
         end
     endtask
 
-    task automatic uart_clear_rx_addr(input addr_t addr);
+    function automatic logic uart_addr_is_rx_read(input addr_t addr);
         logic [7:0] offset;
         begin
             offset = u8'(addr - UART_BASE);
-            if ((offset[2:0] == 3'h0) && !uart_lcr[7]) begin
-                uart_rx_valid <= 1'b0;
-            end
+            uart_addr_is_rx_read = (offset[2:0] == 3'h0) && !uart_lcr[7];
         end
-    endtask
+    endfunction
 
-    task automatic uart_read_side_effect(input addr_t addr, input msize_t size);
+    function automatic logic uart_read_pops_rx(input addr_t addr, input msize_t size);
         addr_t aligned_addr;
         strobe_t read_mask;
         begin
             aligned_addr = {addr[63:3], 3'b000};
             read_mask = size_strobe(size, addr[2:0]);
+            uart_read_pops_rx = 1'b0;
             for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
-                if (read_mask[byte_idx]) begin
-                    uart_clear_rx_addr(aligned_addr + 64'(byte_idx));
+                if (read_mask[byte_idx] && uart_addr_is_rx_read(aligned_addr + 64'(byte_idx))) begin
+                    uart_read_pops_rx = 1'b1;
                 end
             end
         end
-    endtask
+    endfunction
+
+    assign uart_rx_pop_req = oreq.valid && is_uart_addr(oreq.addr) &&
+        !oreq.is_write && uart_read_pops_rx(oreq.addr, oreq.size);
+    assign uart_rx_pop_valid = uart_rx_pop_req && uart_rx_valid;
 
     function automatic u32 plic_pending_word();
         plic_pending_word = '0;
@@ -503,8 +516,9 @@ module SimMemoryWithVirtio
             uart_scr <= 8'd0;
             uart_dll <= 8'd0;
             uart_dlm <= 8'd0;
-            uart_rx_valid <= 1'b0;
-            uart_rx_ch <= 8'd0;
+            uart_rx_head <= '0;
+            uart_rx_tail <= '0;
+            uart_rx_count <= '0;
             for (int source_idx = 0; source_idx <= PLIC_SOURCES; source_idx += 1) begin
                 plic_priority[source_idx] <= 64'd0;
             end
@@ -520,16 +534,21 @@ module SimMemoryWithVirtio
             end
             plic_claim_clear_mask <= '0;
             uart_out_valid <= 1'b0;
-            if (oreq.valid && is_uart_addr(oreq.addr) && !oreq.is_write) begin
-                uart_read_side_effect(oreq.addr, oreq.size);
+            if (uart_rx_pop_valid) begin
+                uart_rx_head <= uart_rx_head + 1'b1;
             end
-            if (!uart_rx_valid && (uart_in_ch != 8'hff)) begin
-                uart_rx_valid <= 1'b1;
-                uart_rx_ch <= uart_in_ch;
+            if (uart_rx_push_req) begin
+                uart_rx_fifo[uart_rx_tail] <= uart_in_ch;
+                uart_rx_tail <= uart_rx_tail + 1'b1;
                 if (uart_ier[0]) begin
                     plic_pending[PLIC_UART_SOURCE] <= 1'b1;
                 end
             end
+            unique case ({uart_rx_push_req, uart_rx_pop_valid})
+                2'b10: uart_rx_count <= uart_rx_count + 1'b1;
+                2'b01: uart_rx_count <= uart_rx_count - 1'b1;
+                default: begin end
+            endcase
             if (!(oreq.valid && is_local_addr(oreq.addr))) begin
                 local_req_active <= 1'b0;
             end
