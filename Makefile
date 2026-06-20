@@ -133,7 +133,7 @@ test-labplus-virtio:
 	  vsrc/util/SimMemoryWithVirtio.sv \
 	  vsrc/test/simple_virtio_block_tb.sv \
 	  vsrc/test/ram_dpi_stubs.cpp
-	./build/simple-virtio/simple_virtio_block_tb
+	./build/simple-virtio/simple_virtio_block_tb +simple_blk_image=build/simple-virtio/simple-blk.img
 
 clean:
 	rm -rf build

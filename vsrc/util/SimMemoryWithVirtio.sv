@@ -36,6 +36,7 @@ module SimMemoryWithVirtio
     localparam int SIMPLE_BLK_SECTORS = 16;
     localparam int SIMPLE_BLK_WORDS_PER_SECTOR = 64;
     localparam int SIMPLE_BLK_WORDS = SIMPLE_BLK_SECTORS * SIMPLE_BLK_WORDS_PER_SECTOR;
+    localparam int SIMPLE_BLK_BYTES = SIMPLE_BLK_WORDS * 8;
     localparam int UART_RX_FIFO_DEPTH = 16;
     localparam int UART_RX_FIFO_INDEX_BITS = $clog2(UART_RX_FIFO_DEPTH);
     localparam int UART_RX_FIFO_COUNT_BITS = $clog2(UART_RX_FIFO_DEPTH + 1);
@@ -48,7 +49,10 @@ module SimMemoryWithVirtio
     logic local_req_active;
     logic ram_exint, plic_irq_m, plic_irq_s;
     word_t blk_sector, blk_mem_addr, blk_cmd, blk_status;
+    word_t disk_init [SIMPLE_BLK_WORDS];
     word_t disk [SIMPLE_BLK_WORDS];
+    byte unsigned blk_image_bytes [SIMPLE_BLK_BYTES];
+    logic disk_init_loaded = 1'b0;
     word_t plic_priority [PLIC_SOURCES:0];
     logic [PLIC_SOURCES:0] plic_pending, plic_enable_m, plic_enable_s;
     logic [PLIC_SOURCES:0] plic_claim_clear_mask;
@@ -149,6 +153,40 @@ module SimMemoryWithVirtio
     function automatic addr_t ram_idx(input addr_t addr);
         ram_idx = (addr > 64'h8000_0000) ? ((addr - 64'h8000_0000) >> 3) : 64'd0;
     endfunction
+
+    function automatic word_t simple_blk_default_word(input int idx);
+        simple_blk_default_word = 64'h5342_4c4b_0000_0000 | 64'(idx);
+    endfunction
+
+    task automatic load_disk_init();
+        string image_path;
+        int image_fd;
+        int bytes_read;
+        int byte_offset;
+        begin
+            for (int i = 0; i < SIMPLE_BLK_WORDS; i += 1) begin
+                disk_init[i] = simple_blk_default_word(i);
+            end
+            if ($value$plusargs("simple_blk_image=%s", image_path)) begin
+                image_fd = $fopen(image_path, "rb");
+                if (image_fd == 0) begin
+                    $fatal(1, "failed to open simple block image: %s", image_path);
+                end
+                bytes_read = $fread(blk_image_bytes, image_fd);
+                $fclose(image_fd);
+                for (int word_idx = 0; word_idx < SIMPLE_BLK_WORDS; word_idx += 1) begin
+                    for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+                        byte_offset = word_idx * 8 + byte_idx;
+                        if (byte_offset < bytes_read) begin
+                            disk_init[word_idx][byte_idx * 8 +: 8] = blk_image_bytes[byte_offset];
+                        end
+                    end
+                end
+                $display("simple block image loaded: %s (%0d bytes, capacity %0d bytes)",
+                    image_path, bytes_read, SIMPLE_BLK_BYTES);
+            end
+        end
+    endtask
 
     function automatic strobe_t size_strobe(input msize_t size, input logic [2:0] ofs);
         unique case (size)
@@ -620,6 +658,10 @@ module SimMemoryWithVirtio
             plic_enable_m <= '0;
             plic_enable_s <= '0;
             plic_claim_clear_mask <= '0;
+            if (!disk_init_loaded) begin
+                load_disk_init();
+                disk_init_loaded <= 1'b1;
+            end
             uart_out_valid <= 1'b0;
             uart_out_ch <= 8'd0;
             uart_ier <= 8'd0;
@@ -640,7 +682,7 @@ module SimMemoryWithVirtio
                 plic_priority[source_idx] <= 64'd0;
             end
             for (int i = 0; i < SIMPLE_BLK_WORDS; i += 1) begin
-                disk[i] <= 64'h5342_4c4b_0000_0000 | 64'(i);
+                disk[i] <= disk_init[i];
             end
         end
         else begin
