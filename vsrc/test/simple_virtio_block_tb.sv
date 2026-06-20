@@ -95,7 +95,7 @@ module simple_virtio_block_tb
         clk = 1'b0;
         reset = 1'b1;
         oreq = '0;
-        uart_in_ch = 8'd0;
+        uart_in_ch = 8'hff;
         repeat (3) @(posedge clk);
         reset = 1'b0;
         @(posedge clk);

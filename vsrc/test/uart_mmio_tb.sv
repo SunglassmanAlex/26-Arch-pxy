@@ -13,6 +13,12 @@ module uart_mmio_tb
     localparam addr_t UART_MCR = UART_BASE + 64'h4;
     localparam addr_t UART_LSR = UART_BASE + 64'h5;
     localparam addr_t UART_SCR = UART_BASE + 64'h7;
+    localparam addr_t PLIC_BASE = 64'h0000_0000_0c00_0000;
+    localparam addr_t PLIC_PENDING = PLIC_BASE + 64'h1000;
+    localparam addr_t PLIC_M_ENABLE = PLIC_BASE + 64'h2000;
+    localparam addr_t PLIC_M_THRESHOLD = PLIC_BASE + 64'h200000;
+    localparam addr_t PLIC_M_CLAIM = PLIC_BASE + 64'h200004;
+    localparam int UART_IRQ = 10;
 
     logic clk, reset;
     cbus_req_t oreq;
@@ -54,9 +60,56 @@ module uart_mmio_tb
         raw = oresp.data;
         data = u8'(raw >> {addr[2:0], 3'b000});
         @(posedge clk);
+        #1;
         oreq = '0;
         @(posedge clk);
         #1;
+    endtask
+
+    task automatic read32(input addr_t addr, output u32 data);
+        word_t raw;
+        oreq = '0;
+        oreq.valid = 1'b1;
+        oreq.is_write = 1'b0;
+        oreq.size = MSIZE4;
+        oreq.addr = addr;
+        oreq.len = MLEN1;
+        oreq.burst = AXI_BURST_FIXED;
+        #1;
+        while (!oresp.last) begin
+            @(posedge clk);
+            #1;
+        end
+        raw = oresp.data;
+        data = u32'(raw >> {addr[2:0], 3'b000});
+        @(posedge clk);
+        #1;
+        oreq = '0;
+        @(posedge clk);
+        #1;
+    endtask
+
+    task automatic write32(input addr_t addr, input u32 data, input string name);
+        oreq = '0;
+        oreq.valid = 1'b1;
+        oreq.is_write = 1'b1;
+        oreq.size = MSIZE4;
+        oreq.addr = addr;
+        oreq.strobe = 8'b0000_1111 << addr[2:0];
+        oreq.data = {32'd0, data} << {addr[2:0], 3'b000};
+        oreq.len = MLEN1;
+        oreq.burst = AXI_BURST_FIXED;
+        #1;
+        while (!oresp.last) begin
+            @(posedge clk);
+            #1;
+        end
+        @(posedge clk);
+        #1;
+        oreq = '0;
+        @(posedge clk);
+        #1;
+        $display("%s [OK]", name);
     endtask
 
     task automatic write8(
@@ -106,11 +159,42 @@ module uart_mmio_tb
         $display("%s [OK]", name);
     endtask
 
+    task automatic expect32(input addr_t addr, input u32 expected, input string name);
+        u32 data;
+        read32(addr, data);
+        if (data !== expected) begin
+            $fatal(1, "%s read %h expected %h", name, data, expected);
+        end
+        $display("%s [OK]", name);
+    endtask
+
+    task automatic expect_exint(input logic expected, input string name);
+        @(posedge clk);
+        #1;
+        if (exint !== expected) begin
+            $fatal(1, "%s exint=%b expected %b", name, exint, expected);
+        end
+        $display("%s [OK]", name);
+    endtask
+
+    task automatic inject_rx(input u8 data, input string name);
+        if (!uart_in_valid) begin
+            $fatal(1, "%s uart_in_valid is low", name);
+        end
+        uart_in_ch = data;
+        @(posedge clk);
+        #1;
+        uart_in_ch = 8'hff;
+        @(posedge clk);
+        #1;
+        $display("%s [OK]", name);
+    endtask
+
     initial begin
         clk = 1'b0;
         reset = 1'b1;
         oreq = '0;
-        uart_in_ch = 8'd0;
+        uart_in_ch = 8'hff;
         repeat (3) @(posedge clk);
         reset = 1'b0;
         @(posedge clk);
@@ -135,9 +219,24 @@ module uart_mmio_tb
 
         write8(UART_RBR_THR_DLL, 8'h41, 1'b1, 8'h41, "uart_tx_A");
 
+        write32(PLIC_BASE + 64'(UART_IRQ * 4), 32'd4, "plic_uart_priority");
+        write32(PLIC_M_ENABLE, 32'(1 << UART_IRQ), "plic_uart_m_enable");
+        write32(PLIC_M_THRESHOLD, 32'd0, "plic_uart_m_threshold");
+        inject_rx(8'h42, "uart_rx_inject_B");
+        expect8(UART_LSR, 8'h61, "uart_lsr_rx_ready");
+        expect8(UART_IIR_FCR, 8'h04, "uart_iir_rx_pending");
+        expect32(PLIC_PENDING, 32'(1 << UART_IRQ), "plic_uart_pending");
+        expect_exint(1'b1, "plic_uart_exint");
+        expect8(UART_RBR_THR_DLL, 8'h42, "uart_rx_read_B");
+        expect8(UART_LSR, 8'h60, "uart_lsr_rx_empty");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_rx_empty");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_claim");
+        expect_exint(1'b0, "plic_uart_claim_clears_exint");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_complete");
+
         $display("UART MMIO directed tests passed.");
         $finish;
     end
 
-    `UNUSED_OK({trint, swint, exint, uart_in_valid});
+    `UNUSED_OK({trint, swint});
 endmodule

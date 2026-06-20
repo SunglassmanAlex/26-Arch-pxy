@@ -27,7 +27,7 @@
 - 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
 - 新增仿真侧简化 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器，并提供同步 512B sector 读写扩展。
 - 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1。
-- 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化和 TX 输出路径，并连接到 difftest UART 输出端口。
+- 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、RX ready/RBR 读取，并将 UART RX interrupt 接到 PLIC source 10。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
 - 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-plic`、`test-labplus-uart` 与 `test-labplus-virtio` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
@@ -228,13 +228,13 @@ simple virtio block 命令完成时会置位 PLIC source 1 pending，因此软�
 
 为了让 xv6/QEMU 风格软件能够直接访问标准 UART，本次在 `SimMemoryWithVirtio` 中继续拦截 `0x10000000` 到 `0x100000ff`，实现一个最小 16550 兼容模型：
 
-- offset 0：`RBR/THR/DLL`。`LCR.DLAB=1` 时写入/读出 DLL；否则写 THR 产生一个 `uart_out_valid/ch` 输出脉冲。
+- offset 0：`RBR/THR/DLL`。`LCR.DLAB=1` 时写入/读出 DLL；否则写 THR 产生一个 `uart_out_valid/ch` 输出脉冲，读 RBR 返回 RX 缓冲字符并清除 `LSR.RX_READY`。
 - offset 1：`IER/DLM`。`LCR.DLAB=1` 时访问 DLM；否则访问 IER。
-- offset 2：`IIR/FCR`。读 IIR 固定返回 `0x01`，表示当前无 UART 中断 pending；写 FCR 被接受但不维护 FIFO 状态。
+- offset 2：`IIR/FCR`。无 UART 中断 pending 时读 IIR 返回 `0x01`；当 `IER.RX=1` 且 RX 缓冲非空时返回 `0x04`，表示 received data available。
 - offset 3/4/7：`LCR/MCR/SCR` 可读写。
-- offset 5：`LSR` 固定返回 `0x60`，表示 THR empty 和 transmitter empty，满足 xv6 `uartputc` 的轮询条件。
+- offset 5：`LSR` 固定保持 `THR empty/transmitter empty=1`，并根据 RX 缓冲状态动态维护 bit0 `RX_READY`，满足 xv6 `uartputc` 和 `uartgetc` 的轮询条件。
 
-`SimTop` 不再把 difftest UART 端口固定为 0，而是将 `SimMemoryWithVirtio` 的 TX 输出连接到 `io_uart_out_valid/io_uart_out_ch`。RX 侧目前保留接口但不主动提供字符，因此 `LSR.RX_READY=0`；后续如果要做交互式输入，再把 host 输入缓存和 PLIC source 10 接进来即可。
+`SimTop` 不再把 difftest UART 端口固定为 0，而是将 `SimMemoryWithVirtio` 的 TX 输出连接到 `io_uart_out_valid/io_uart_out_ch`。RX 侧将 `io_uart_in_ch=8'hff` 视为无字符，其它值会进入一字节 RX 缓冲；若 `IER.RX=1`，同时置位 PLIC source 10 pending，软件可以通过 PLIC claim/complete 接收 UART RX 外部中断。
 
 ## 5. 前端性能优化
 
@@ -360,13 +360,13 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/util/SimMemoryWithVirtio.sv`
   - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO。
   - 新增 PLIC MMIO 模型，拦截 `0x0c000000` 到 `0x0fffffff`，支持 source priority、pending、M/S enable、threshold、claim/complete。
-  - 新增 `0x10000000` 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、MCR、SCR、LSR 和 THR TX 输出。
+  - 新增 `0x10000000` 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、MCR、SCR、LSR、THR TX 输出、RBR RX 读取和 RX interrupt 到 PLIC source 10。
 - `vsrc/SimTop.sv`
-  - 将仿真 UART TX 输出接到 difftest 顶层 `io_uart_out_valid/io_uart_out_ch`。
+  - 将仿真 UART TX/RX 端口接到 difftest 顶层 `io_uart_out_valid/io_uart_out_ch/io_uart_in_*`。
 - `vsrc/test/plic_mmio_tb.sv`
   - 新增 PLIC MMIO 定向测试，覆盖 priority、pending、M/S enable、M/S threshold、claim/complete，以及 virtio source 1 中断注入。
 - `vsrc/test/uart_mmio_tb.sv`
-  - 新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径和 TX 输出。
+  - 新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready/RBR 清除和 PLIC source 10 claim。
 - `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
   - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证 512B sector write/read。
 - `Makefile`
@@ -595,10 +595,24 @@ uart_mcr_read [OK]
 uart_scr_write [OK]
 uart_scr_read [OK]
 uart_tx_A [OK]
+plic_uart_priority [OK]
+plic_uart_m_enable [OK]
+plic_uart_m_threshold [OK]
+uart_rx_inject_B [OK]
+uart_lsr_rx_ready [OK]
+uart_iir_rx_pending [OK]
+plic_uart_pending [OK]
+plic_uart_exint [OK]
+uart_rx_read_B [OK]
+uart_lsr_rx_empty [OK]
+uart_iir_rx_empty [OK]
+plic_uart_claim [OK]
+plic_uart_claim_clears_exint [OK]
+plic_uart_complete [OK]
 UART MMIO directed tests passed.
 ```
 
-该测试直接实例化 `SimMemoryWithVirtio`，用 8-bit CBus 访问模拟 xv6 的 UART 初始化流程：先设置 `LCR.DLAB` 写 DLL/DLM，再恢复 8N1、写 IER/MCR/SCR，最后写 THR 并检查 `uart_out_valid/ch` 输出字符 `A`。
+该测试直接实例化 `SimMemoryWithVirtio`，用 8-bit CBus 访问模拟 xv6 的 UART 初始化流程：先设置 `LCR.DLAB` 写 DLL/DLM，再恢复 8N1、写 IER/MCR/SCR，写 THR 并检查 `uart_out_valid/ch` 输出字符 `A`。随后配置 PLIC source 10，注入 RX 字符 `B`，验证 `LSR.RX_READY`、`IIR=0x04`、PLIC pending/exint、读 RBR 清 RX-ready，以及 PLIC claim/complete。
 
 ### 7.12 Simple virtio block MMIO 定向测试
 
@@ -624,17 +638,18 @@ simple virtio block MMIO test passed.
 
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、简化同步块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX 模型，并补了独立 page fault、S interrupt、PLIC、UART 和 simple-block 定向测试。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、简化同步块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX interrupt 模型，并补了独立 page fault、S interrupt、PLIC、UART 和 simple-block 定向测试。后续如果继续推进 xv6，需要补充：
 
 - 完整 virtio descriptor/avail/used ring，或从 `fs.img` 加载初始 disk 内容。
-- 将 UART RX、UART RX interrupt、完整 virtio queue 中断等更多真实设备事件接入 PLIC source。
+- 将当前单字节 UART RX 缓冲扩展为 FIFO，并补 host 侧交互输入。
+- 将完整 virtio queue 中断等更多真实设备事件接入 PLIC source。
 - 更完整的 I-cache/分支预测或多级流水线，用于进一步提升 `test-labplus-2` 性能。
 
 这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 8-entry PMP、atomic、virtio 简化模型和前端空泡优化，因此本次没有继续扩大范围。
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、简化 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX 模型，以及独立 MMU page fault、S interrupt、PLIC、UART 和 simple-block 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、简化 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX interrupt 模型，以及独立 MMU page fault、S interrupt、PLIC、UART 和 simple-block 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 
