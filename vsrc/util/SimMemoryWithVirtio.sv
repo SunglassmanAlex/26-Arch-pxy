@@ -14,8 +14,15 @@ module SimMemoryWithVirtio
     output cbus_resp_t oresp,
     output logic trint,
     output logic swint,
-    output logic exint
+    output logic exint,
+    output logic uart_out_valid,
+    output logic [7:0] uart_out_ch,
+    output logic uart_in_valid,
+    input  logic [7:0] uart_in_ch
 );
+    localparam addr_t UART_BASE = 64'h0000_0000_1000_0000;
+    localparam addr_t UART_END  = 64'h0000_0000_1000_0100;
+
     localparam addr_t PLIC_BASE = 64'h0000_0000_0c00_0000;
     localparam addr_t PLIC_END  = 64'h0000_0000_1000_0000;
     localparam int PLIC_SOURCES = 16;
@@ -39,6 +46,7 @@ module SimMemoryWithVirtio
     logic [PLIC_SOURCES:0] plic_pending, plic_enable_m, plic_enable_s;
     logic [PLIC_SOURCES:0] plic_claim_clear_mask;
     word_t plic_threshold_m, plic_threshold_s;
+    u8 uart_ier, uart_lcr, uart_mcr, uart_scr, uart_dll, uart_dlm;
 
     RAMHelper2 ram(
         .clk(clk),
@@ -51,6 +59,11 @@ module SimMemoryWithVirtio
     );
 
     assign exint = ram_exint || plic_irq_m || plic_irq_s;
+    assign uart_in_valid = 1'b0;
+
+    function automatic logic is_uart_addr(input addr_t addr);
+        is_uart_addr = (addr >= UART_BASE) && (addr < UART_END);
+    endfunction
 
     function automatic logic is_plic_addr(input addr_t addr);
         is_plic_addr = (addr >= PLIC_BASE) && (addr < PLIC_END);
@@ -61,7 +74,7 @@ module SimMemoryWithVirtio
     endfunction
 
     function automatic logic is_local_addr(input addr_t addr);
-        is_local_addr = is_virtio_addr(addr) || is_plic_addr(addr);
+        is_local_addr = is_uart_addr(addr) || is_virtio_addr(addr) || is_plic_addr(addr);
     endfunction
 
     function automatic addr_t ram_idx(input addr_t addr);
@@ -76,6 +89,81 @@ module SimMemoryWithVirtio
             default: size_strobe = 8'b1111_1111;
         endcase
     endfunction
+
+    function automatic u8 uart_reg_read_byte(input addr_t addr);
+        logic [7:0] offset;
+        logic dlab;
+        begin
+            offset = u8'(addr - UART_BASE);
+            dlab = uart_lcr[7];
+            unique case (offset[2:0])
+                3'h0: uart_reg_read_byte = dlab ? uart_dll : 8'd0;
+                3'h1: uart_reg_read_byte = dlab ? uart_dlm : uart_ier;
+                3'h2: uart_reg_read_byte = 8'h01;
+                3'h3: uart_reg_read_byte = uart_lcr;
+                3'h4: uart_reg_read_byte = uart_mcr;
+                3'h5: uart_reg_read_byte = 8'h60;
+                3'h6: uart_reg_read_byte = 8'd0;
+                3'h7: uart_reg_read_byte = uart_scr;
+                default: uart_reg_read_byte = 8'd0;
+            endcase
+        end
+    endfunction
+
+    function automatic word_t uart_read(input addr_t addr);
+        addr_t aligned_addr;
+        begin
+            aligned_addr = {addr[63:3], 3'b000};
+            for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+                uart_read[byte_idx * 8 +: 8] = uart_reg_read_byte(aligned_addr + 64'(byte_idx));
+            end
+        end
+    endfunction
+
+    task automatic uart_write_byte(input addr_t addr, input u8 data);
+        logic [7:0] offset;
+        logic dlab;
+        begin
+            offset = u8'(addr - UART_BASE);
+            dlab = uart_lcr[7];
+            unique case (offset[2:0])
+                3'h0: begin
+                    if (dlab) begin
+                        uart_dll <= data;
+                    end
+                    else begin
+                        uart_out_valid <= 1'b1;
+                        uart_out_ch <= data;
+                    end
+                end
+                3'h1: begin
+                    if (dlab) begin
+                        uart_dlm <= data;
+                    end
+                    else begin
+                        uart_ier <= data;
+                    end
+                end
+                3'h2: begin end
+                3'h3: uart_lcr <= data;
+                3'h4: uart_mcr <= data;
+                3'h7: uart_scr <= data;
+                default: begin end
+            endcase
+        end
+    endtask
+
+    task automatic uart_write(input addr_t addr, input word_t data, input strobe_t strobe);
+        addr_t aligned_addr;
+        begin
+            aligned_addr = {addr[63:3], 3'b000};
+            for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+                if (strobe[byte_idx]) begin
+                    uart_write_byte(aligned_addr + 64'(byte_idx), data[byte_idx * 8 +: 8]);
+                end
+            end
+        end
+    endtask
 
     function automatic u32 plic_pending_word();
         plic_pending_word = '0;
@@ -324,7 +412,14 @@ module SimMemoryWithVirtio
     assign ram_req = (oreq.valid && is_local_addr(oreq.addr)) ? '0 : oreq;
 
     always_comb begin
-        if (oreq.valid && is_virtio_addr(oreq.addr)) begin
+        if (oreq.valid && is_uart_addr(oreq.addr)) begin
+            oresp.ready = 1'b1;
+            oresp.last = 1'b1;
+            oresp.data = oreq.is_write ? 64'd0 : uart_read(oreq.addr);
+            oresp.paddr = oreq.addr;
+            oresp.page_fault = 1'b0;
+        end
+        else if (oreq.valid && is_virtio_addr(oreq.addr)) begin
             oresp.ready = 1'b1;
             oresp.last = 1'b1;
             oresp.data = oreq.is_write ? 64'd0 : virtio_read(oreq.addr);
@@ -356,6 +451,14 @@ module SimMemoryWithVirtio
             plic_enable_m <= '0;
             plic_enable_s <= '0;
             plic_claim_clear_mask <= '0;
+            uart_out_valid <= 1'b0;
+            uart_out_ch <= 8'd0;
+            uart_ier <= 8'd0;
+            uart_lcr <= 8'd0;
+            uart_mcr <= 8'd0;
+            uart_scr <= 8'd0;
+            uart_dll <= 8'd0;
+            uart_dlm <= 8'd0;
             for (int source_idx = 0; source_idx <= PLIC_SOURCES; source_idx += 1) begin
                 plic_priority[source_idx] <= 64'd0;
             end
@@ -370,12 +473,18 @@ module SimMemoryWithVirtio
                 end
             end
             plic_claim_clear_mask <= '0;
+            uart_out_valid <= 1'b0;
             if (!(oreq.valid && is_local_addr(oreq.addr))) begin
                 local_req_active <= 1'b0;
             end
             else if (!local_req_active) begin
                 local_req_active <= 1'b1;
-                if (is_virtio_addr(oreq.addr)) begin
+                if (is_uart_addr(oreq.addr)) begin
+                    if (oreq.is_write && |oreq.strobe) begin
+                        uart_write(oreq.addr, oreq.data, oreq.strobe);
+                    end
+                end
+                else if (is_virtio_addr(oreq.addr)) begin
                     if (oreq.is_write && |oreq.strobe) begin
                         virtio_write(oreq.addr, oreq.data);
                     end
@@ -391,6 +500,8 @@ module SimMemoryWithVirtio
             end
         end
     end
+
+    `UNUSED_OK(uart_in_ch);
 endmodule
 
 `endif

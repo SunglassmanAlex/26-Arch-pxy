@@ -21,6 +21,8 @@ module plic_mmio_tb
     cbus_req_t oreq;
     cbus_resp_t oresp;
     logic trint, swint, exint;
+    logic uart_out_valid, uart_in_valid;
+    logic [7:0] uart_out_ch, uart_in_ch;
 
     SimMemoryWithVirtio dut(
         .clk(clk),
@@ -29,7 +31,11 @@ module plic_mmio_tb
         .oresp(oresp),
         .trint(trint),
         .swint(swint),
-        .exint(exint)
+        .exint(exint),
+        .uart_out_valid(uart_out_valid),
+        .uart_out_ch(uart_out_ch),
+        .uart_in_valid(uart_in_valid),
+        .uart_in_ch(uart_in_ch)
     );
 
     always #5 clk = ~clk;
@@ -131,6 +137,7 @@ module plic_mmio_tb
         clk = 1'b0;
         reset = 1'b1;
         oreq = '0;
+        uart_in_ch = 8'd0;
         repeat (3) @(posedge clk);
         reset = 1'b0;
         @(posedge clk);
@@ -171,5 +178,5 @@ module plic_mmio_tb
         $finish;
     end
 
-    `UNUSED_OK({trint, swint});
+    `UNUSED_OK({trint, swint, uart_out_valid, uart_out_ch, uart_in_valid});
 endmodule

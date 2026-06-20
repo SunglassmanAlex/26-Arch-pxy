@@ -68,10 +68,18 @@ module SimTop import common::*;(
     );
 
     SimMemoryWithVirtio ram(
-        .clk(clock), .reset, .oreq, .oresp, .trint, .swint, .exint
+        .clk(clock),
+        .reset(reset),
+        .oreq(oreq),
+        .oresp(oresp),
+        .trint(trint),
+        .swint(swint),
+        .exint(exint),
+        .uart_out_valid(io_uart_out_valid),
+        .uart_out_ch(io_uart_out_ch),
+        .uart_in_valid(io_uart_in_valid),
+        .uart_in_ch(io_uart_in_ch)
     );
-
-    assign {io_uart_out_valid, io_uart_out_ch, io_uart_in_valid} = '0;
 
 endmodule
 `endif
