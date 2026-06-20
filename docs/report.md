@@ -6,7 +6,7 @@
 - 学号：24300240128
 - 课程：计算机组成与体系结构（2026 春）
 - 实验：Lab+
-- 完成日期：2026-06-19
+- 完成日期：2026-06-20
 
 ## 2. 完成内容
 
@@ -26,11 +26,12 @@
 - 新增 `SUM/MXR` 支持：`MXR` 允许 load 读取 execute-only 页，`SUM` 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
 - 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
 - 新增仿真侧简化 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器，并提供同步 512B sector 读写扩展。
+- 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
-- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt` 与 `test-labplus-virtio` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-plic` 与 `test-labplus-virtio` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
-本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试和 simple virtio block MMIO 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、PLIC MMIO 定向测试和 simple virtio block MMIO 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 ## 3. Atomic Extension 设计
 
@@ -207,6 +208,21 @@ RISC-V Sv39 的叶子 PTE 中，`A` 表示 accessed，`D` 表示 dirty。为了�
 
 该设备是同步完成模型，适合后续写一个很薄的软件适配层先绕开完整 virtio descriptor/avail/used ring；完整 xv6 原生 virtio 驱动仍需要后续实现 queue 和中断通知。
 
+### 4.11 仿真侧 PLIC MMIO 模型
+
+在 `SimMemoryWithVirtio` 中继续加入 PLIC MMIO 拦截，覆盖常见 RISC-V/QEMU PLIC 地址布局：
+
+- `0x0c000000 + 4 * source`：source priority，当前实现 source 1 到 source 16。
+- `0x0c001000`：pending bitset。
+- `0x0c002000`：hart0 M context enable。
+- `0x0c002080`：hart0 S context enable。
+- `0x0c200000/0x0c200004`：hart0 M context threshold 与 claim/complete。
+- `0x0c201000/0x0c201004`：hart0 S context threshold 与 claim/complete。
+
+中断选择规则为：pending、enable 同时置位，且 `priority > threshold` 时产生对应 context 的 interrupt；多 source 同时 pending 时选择最高 priority，priority 相同时低 source id 优先。claim 读返回当前可处理 source id，并在后一拍清除 pending；complete 写接受 source id，用于兼容常见驱动流程。读 side effect 按实际访问 size/address 对应的 byte lane 限定，避免读取 threshold 时误触发相邻 claim 寄存器。
+
+simple virtio block 命令完成时会置位 PLIC source 1 pending，因此软件可以通过 PLIC enable/threshold/claim 路径接收块设备外部中断。当前 CPU 顶层仍只有一个 `exint` 输入，因此仿真模型将 M/S context 可投递外部中断合并到该输入；实际进入 M trap 还是 S trap 由 CPU 内部 `mideleg/mie/sie/mstatus` 设置决定。
+
 ## 5. 前端性能优化
 
 ### 5.1 顺序取指提前
@@ -256,7 +272,7 @@ RISC-V Sv39 的叶子 PTE 中，`A` 表示 accessed，`D` 表示 dirty。为了�
 
 | 测试 | 原始 cycleCnt | 顺序取指提前 | CBus fast path | 8B 行缓冲后 | 总周期减少 | 最终 IPC |
 |---|---:|---:|---:|---:|---:|---:|
-| `lab+/3/atomicity.bin` | 372 | 317 | 249 | 196 | 47.3% | 0.281 |
+| `lab+/3/atomicity.bin` | 372 | 317 | 249 | 197 | 47.0% | 0.279 |
 | `lab1-extra-test.bin` | 185976 | 153201 | 120425 | 93022 | 50.0% | 0.352 |
 | `lab4-test.bin` | 208529 | 177990 | 139050 | 110574 | 47.0% | 0.296 |
 
@@ -330,10 +346,13 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   - 为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
 - `vsrc/util/SimMemoryWithVirtio.sv`
   - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO。
+  - 新增 PLIC MMIO 模型，拦截 `0x0c000000` 到 `0x0fffffff`，支持 source priority、pending、M/S enable、threshold、claim/complete。
+- `vsrc/test/plic_mmio_tb.sv`
+  - 新增 PLIC MMIO 定向测试，覆盖 priority、pending、M/S enable、M/S threshold、claim/complete，以及 virtio source 1 中断注入。
 - `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
   - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证 512B sector write/read。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt` 和 `test-labplus-virtio`。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-plic` 和 `test-labplus-virtio`。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -354,7 +373,7 @@ The image is ./ready-to-run/lab+/3/atomicity.bin
 The first instruction of core 0 has commited. Difftest enabled.
 Core 0: HIT GOOD TRAP at pc = 0x800000dc
 total guest instructions = 55
-instrCnt = 55, cycleCnt = 196
+instrCnt = 55, cycleCnt = 197
 ```
 
 该测试依次验证：
@@ -447,7 +466,7 @@ Exit with code = 0
 ```text
 make test-labplus-3
 Core 0: HIT GOOD TRAP at pc = 0x800000dc
-instrCnt = 55, cycleCnt = 196
+instrCnt = 55, cycleCnt = 197
 
 Lab5 kernel:
 Return from init! Test passed
@@ -498,7 +517,40 @@ S-mode interrupt pending delegation test passed.
 
 该测试直接实例化 `core`，手写最小指令流：M 态设置 `mideleg=0x222`、`mie.STIE=1`、`stvec=0x80`、`mepc=0x40`、`mstatus.MPP=S/SIE=1`，随后执行 `mret`。测试保持 `trint=1`，确认 CPU 返回 S 态后进入 S trap，并检查 `scause=0x8000000000000005`、`sepc=0x40`，从而覆盖 `trint -> STIP -> S-mode timer interrupt` 的转换路径。
 
-### 7.10 Simple virtio block MMIO 定向测试
+### 7.10 PLIC MMIO 定向测试
+
+运行：
+
+```bash
+make test-labplus-plic
+```
+
+关键输出：
+
+```text
+plic_priority_reset [OK]
+plic_pending_reset [OK]
+plic_irq_reset [OK]
+plic_priority_write [OK]
+plic_m_enable_write [OK]
+plic_pending_after_virtio [OK]
+plic_m_irq_pending [OK]
+plic_m_threshold_read_no_claim [OK]
+plic_m_irq_after_threshold_read [OK]
+plic_m_claim [OK]
+plic_m_claim_clears_pending [OK]
+plic_m_complete_no_repend [OK]
+plic_s_pending_with_threshold [OK]
+plic_s_threshold_blocks_irq [OK]
+plic_s_threshold_allows_irq [OK]
+plic_s_claim [OK]
+plic_s_complete [OK]
+PLIC MMIO directed tests passed.
+```
+
+该测试直接实例化 `SimMemoryWithVirtio`，先配置 PLIC source 1 priority、M/S enable 和 threshold，再通过 simple virtio block 命令完成事件置位 pending，验证 M context 和 S context 的 claim/complete 行为。
+
+### 7.11 Simple virtio block MMIO 定向测试
 
 运行：
 
@@ -522,17 +574,17 @@ simple virtio block MMIO test passed.
 
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的前四步：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查，以及一个简化同步块设备 MMIO，并补了独立 page fault、S interrupt 和 simple-block 定向测试。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的前五步：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、简化同步块设备 MMIO，以及仿真侧 PLIC MMIO 模型，并补了独立 page fault、S interrupt、PLIC 和 simple-block 定向测试。后续如果继续推进 xv6，需要补充：
 
 - 完整 virtio descriptor/avail/used ring，或从 `fs.img` 加载初始 disk 内容。
-- 更完整的 PLIC claim/complete、优先级和 enable/pending 寄存器模型。
+- 将 UART RX、完整 virtio queue 中断等更多真实设备事件接入 PLIC source。
 - 更完整的 I-cache/分支预测或多级流水线，用于进一步提升 `test-labplus-2` 性能。
 
 这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 8-entry PMP、atomic、virtio 简化模型和前端空泡优化，因此本次没有继续扩大范围。
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、简化 virtio/disk MMIO，以及独立 MMU page fault、S interrupt 和 simple-block 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 196。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、简化 virtio/disk MMIO、仿真侧 PLIC MMIO 模型，以及独立 MMU page fault、S interrupt、PLIC 和 simple-block 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、PLIC MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 

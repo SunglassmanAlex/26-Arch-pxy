@@ -15,6 +15,7 @@ no_arguments:
 	@echo "  - test-labplus-4: Run Lab+ PMP test"
 	@echo "  - test-labplus-pagefault: Run Lab+ directed MMU page-fault test"
 	@echo "  - test-labplus-sinterrupt: Run Lab+ directed S-mode interrupt test"
+	@echo "  - test-labplus-plic: Run Lab+ directed PLIC MMIO test"
 	@echo "  - test-labplus-virtio: Run Lab+ directed simple virtio block test"
 
 init:
@@ -96,6 +97,18 @@ test-labplus-sinterrupt:
 	  -Mdir build/s-interrupt -o s_interrupt_pending_tb \
 	  vsrc/test/difftest_stubs.sv vsrc/test/s_interrupt_pending_tb.sv
 	./build/s-interrupt/s_interrupt_pending_tb
+
+test-labplus-plic:
+	rm -rf build/plic-mmio
+	verilator --binary --timing --top-module plic_mmio_tb \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/plic-mmio -o plic_mmio_tb \
+	  difftest/src/test/vsrc/common/ram.v \
+	  difftest/src/test/vsrc/common/ram.sv \
+	  vsrc/util/SimMemoryWithVirtio.sv \
+	  vsrc/test/plic_mmio_tb.sv \
+	  vsrc/test/ram_dpi_stubs.cpp
+	./build/plic-mmio/plic_mmio_tb
 
 test-labplus-virtio:
 	rm -rf build/simple-virtio
