@@ -39,6 +39,8 @@ module SimMemoryWithVirtio
     localparam int UART_RX_FIFO_DEPTH = 16;
     localparam int UART_RX_FIFO_INDEX_BITS = $clog2(UART_RX_FIFO_DEPTH);
     localparam int UART_RX_FIFO_COUNT_BITS = $clog2(UART_RX_FIFO_DEPTH + 1);
+    localparam int UART_RX_TIMEOUT_CYCLES = 16;
+    localparam int UART_RX_TIMEOUT_BITS = $clog2(UART_RX_TIMEOUT_CYCLES + 1);
 
     cbus_req_t ram_req;
     cbus_resp_t ram_resp;
@@ -55,10 +57,12 @@ module SimMemoryWithVirtio
     u8 uart_rx_fifo [UART_RX_FIFO_DEPTH];
     logic [UART_RX_FIFO_INDEX_BITS-1:0] uart_rx_head, uart_rx_tail;
     logic [UART_RX_FIFO_COUNT_BITS-1:0] uart_rx_count, uart_rx_count_next;
+    logic [UART_RX_TIMEOUT_BITS-1:0] uart_rx_timeout_count;
     logic uart_rx_valid, uart_rx_full;
     logic uart_rx_pop_req, uart_rx_pop_valid, uart_rx_push_req, uart_rx_overrun_req;
     logic uart_lsr_overrun, uart_lsr_read_req, uart_iir_read_req;
-    logic uart_rx_irq_active, uart_rx_irq_next_active;
+    logic uart_rx_irq_active, uart_rx_irq_next_active, uart_rx_timeout_irq_active;
+    logic uart_rx_timeout_pending, uart_rx_fifo_activity;
     logic uart_thr_irq_pending, uart_iir_reports_thre;
 
     RAMHelper2 ram(
@@ -108,8 +112,11 @@ module SimMemoryWithVirtio
 
     assign uart_rx_irq_active = uart_ier[0] && uart_rx_threshold_met(uart_rx_count);
     assign uart_rx_irq_next_active = uart_ier[0] && uart_rx_threshold_met(uart_rx_count_next);
+    assign uart_rx_timeout_irq_active = uart_ier[0] && uart_rx_timeout_pending && uart_rx_valid;
+    assign uart_rx_fifo_activity = uart_rx_push_req || uart_rx_pop_valid;
     assign uart_iir_reports_thre = uart_thr_irq_pending &&
-        !(uart_lsr_overrun && uart_ier[2]) && !uart_rx_irq_active;
+        !(uart_lsr_overrun && uart_ier[2]) && !uart_rx_irq_active &&
+        !uart_rx_timeout_irq_active;
 
     function automatic logic is_uart_addr(input addr_t addr);
         is_uart_addr = (addr >= UART_BASE) && (addr < UART_END);
@@ -164,7 +171,8 @@ module SimMemoryWithVirtio
                 3'h1: uart_reg_read_byte = dlab ? uart_dlm : uart_ier;
                 3'h2: uart_reg_read_byte = (uart_lsr_overrun && uart_ier[2]) ? 8'h06 :
                     (uart_rx_irq_active ? 8'h04 :
-                    (uart_thr_irq_pending ? 8'h02 : 8'h01));
+                    (uart_rx_timeout_irq_active ? 8'h0c :
+                    (uart_thr_irq_pending ? 8'h02 : 8'h01)));
                 3'h3: uart_reg_read_byte = uart_lcr;
                 3'h4: uart_reg_read_byte = uart_mcr;
                 3'h5: uart_reg_read_byte = {
@@ -221,6 +229,7 @@ module SimMemoryWithVirtio
                             uart_thr_irq_pending <= 1'b0;
                         end
                         if ((data[0] && uart_rx_threshold_met(uart_rx_count)) ||
+                            (data[0] && uart_rx_timeout_pending && uart_rx_valid) ||
                             (data[2] && uart_lsr_overrun)) begin
                             plic_pending[PLIC_UART_SOURCE] <= 1'b1;
                         end
@@ -232,6 +241,8 @@ module SimMemoryWithVirtio
                         uart_rx_head <= '0;
                         uart_rx_tail <= '0;
                         uart_rx_count <= '0;
+                        uart_rx_timeout_count <= '0;
+                        uart_rx_timeout_pending <= 1'b0;
                         uart_lsr_overrun <= 1'b0;
                     end
                     else if (uart_ier[0] &&
@@ -621,6 +632,8 @@ module SimMemoryWithVirtio
             uart_rx_head <= '0;
             uart_rx_tail <= '0;
             uart_rx_count <= '0;
+            uart_rx_timeout_count <= '0;
+            uart_rx_timeout_pending <= 1'b0;
             uart_lsr_overrun <= 1'b0;
             uart_thr_irq_pending <= 1'b0;
             for (int source_idx = 0; source_idx <= PLIC_SOURCES; source_idx += 1) begin
@@ -652,6 +665,24 @@ module SimMemoryWithVirtio
                 uart_rx_tail <= uart_rx_tail + 1'b1;
                 if (uart_rx_irq_next_active) begin
                     plic_pending[PLIC_UART_SOURCE] <= 1'b1;
+                end
+            end
+            if (uart_rx_fifo_activity) begin
+                uart_rx_timeout_pending <= 1'b0;
+                uart_rx_timeout_count <= (uart_rx_count_next != '0) ?
+                    UART_RX_TIMEOUT_BITS'(UART_RX_TIMEOUT_CYCLES) : '0;
+            end
+            else if (uart_rx_count == '0) begin
+                uart_rx_timeout_pending <= 1'b0;
+                uart_rx_timeout_count <= '0;
+            end
+            else if (!uart_rx_timeout_pending && (uart_rx_timeout_count != '0)) begin
+                uart_rx_timeout_count <= uart_rx_timeout_count - 1'b1;
+                if (uart_rx_timeout_count == UART_RX_TIMEOUT_BITS'(1)) begin
+                    uart_rx_timeout_pending <= 1'b1;
+                    if (uart_ier[0]) begin
+                        plic_pending[PLIC_UART_SOURCE] <= 1'b1;
+                    end
                 end
             end
             if (uart_rx_overrun_req) begin

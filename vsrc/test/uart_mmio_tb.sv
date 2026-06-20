@@ -309,6 +309,22 @@ module uart_mmio_tb
         expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_thre_tx_claim");
         write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_thre_tx_complete");
 
+        write8(UART_IER_DLM, 8'h01, 1'b0, 8'd0, "uart_ier_enable_rx_timeout");
+        write8(UART_IIR_FCR, 8'h41, 1'b0, 8'd0, "uart_fcr_timeout_trigger4");
+        inject_rx(8'h60, "uart_rx_timeout_inject");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_timeout_waiting");
+        expect_exint(1'b0, "plic_uart_timeout_not_yet");
+        repeat (20) @(posedge clk);
+        #1;
+        $display("uart_rx_timeout_wait [OK]");
+        expect8(UART_IIR_FCR, 8'h0c, "uart_iir_rx_timeout");
+        expect_exint(1'b1, "plic_uart_timeout_exint");
+        expect8(UART_RBR_THR_DLL, 8'h60, "uart_rx_timeout_read");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_timeout_cleared");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_timeout_claim");
+        expect_exint(1'b0, "plic_uart_timeout_claim_clears_exint");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_timeout_complete");
+
         $display("UART MMIO directed tests passed.");
         $finish;
     end
