@@ -25,14 +25,14 @@
 - 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
 - 新增 `SUM/MXR` 支持：`MXR` 允许 load 读取 execute-only 页，`SUM` 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
 - 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
-- 新增仿真侧简化 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器，提供同步 512B sector 读写扩展，并支持 `+simple_blk_image=...` 从二进制镜像初始化 disk。
+- 新增仿真侧 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器，提供同步 512B sector 读写扩展，支持单 queue 的 descriptor/avail/used ring 子集，并支持 `+simple_blk_image=...` 从二进制镜像初始化 disk。
 - 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1。
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear 和 LSR overrun，并将 UART interrupt 接到 PLIC source 10。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
 - 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-plic`、`test-labplus-uart` 与 `test-labplus-virtio` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
-本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试和 simple virtio block MMIO 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试和 simple virtio block/virtqueue MMIO 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 ## 3. Atomic Extension 设计
 
@@ -189,9 +189,9 @@ RISC-V Sv39 的叶子 PTE 中，`A` 表示 accessed，`D` 表示 dirty。为了�
 
 实现上，`core` 将当前 `mstatus` 输出到 MMU，MMU 在叶子 PTE 权限判断时组合使用 `priv_mode`、`is_instr`、`is_write`、`SUM/MXR` 和 `R/W/X/U` 位。该改动不改变 CSR 写入路径，`MSTATUS_MASK/SSTATUS_MASK` 之前已经开放了 `SUM/MXR` 位，因此软件可以通过 `mstatus/sstatus` 正常设置。
 
-### 4.10 简化 virtio/disk MMIO
+### 4.10 virtio/disk MMIO
 
-为了继续推进 xv6 所需的块设备方向，本次先在仿真侧加入一个简化块设备，而不是直接实现完整 virtio queue。实现方式是新增 `SimMemoryWithVirtio` 包装器：它拦截 `0x10001000` 到 `0x100011ff` 的 MMIO 访问，其它请求继续转发给原来的 `RAMHelper2`，因此 UART、mtime/mtimecmp、msip 和普通 RAM 行为保持不变。
+为了继续推进 xv6 所需的块设备方向，本次在仿真侧加入 `SimMemoryWithVirtio` 包装器：它拦截 `0x10001000` 到 `0x100011ff` 的 MMIO 访问，其它请求继续转发给原来的 `RAMHelper2`，因此 UART、mtime/mtimecmp、msip 和普通 RAM 行为保持不变。
 
 兼容识别寄存器：
 
@@ -207,7 +207,14 @@ RISC-V Sv39 的叶子 PTE 中，`A` 表示 accessed，`D` 表示 dirty。为了�
 - `0x10001120`：sector 数量，当前为 16。
 - `0x10001128`：sector 大小，当前为 512B。
 
-该设备是同步完成模型，适合后续写一个很薄的软件适配层先绕开完整 virtio descriptor/avail/used ring；完整 xv6 原生 virtio 驱动仍需要后续实现 queue 和中断通知。
+标准 virtio-mmio queue 子集：
+
+- 支持 queue 0，`QueueNumMax=8`，实现 `QueueSel/QueueNum/QueueReady/QueueDescLow/High/QueueDriverLow/High/QueueDeviceLow/High/QueueNotify`。
+- `QueueNotify=0` 时读取 avail ring 的下一个 head descriptor，按 virtio block 的三段 descriptor 链处理：request header、512B data buffer、1B status。
+- 支持 `VIRTIO_BLK_T_IN=0` 从 disk 读入 driver writable buffer，支持 `VIRTIO_BLK_T_OUT=1` 从 driver buffer 写回 disk；完成后写 status byte、used ring element 和 used idx。
+- 完成 queue 请求后置位 `InterruptStatus[0]`，并复用 PLIC source 1 pending；软件可通过 `InterruptACK` 清除 virtio 中断状态。
+
+该 queue 子集已经覆盖 descriptor/avail/used ring 的基本读写路径，但还没有实现多 queue、indirect descriptor、event idx、完整 feature negotiation 和 reset 后设备配置版本管理。
 
 为了让该同步块设备能承载更接近 xv6 的文件系统内容，模型额外支持运行时 plusarg：`+simple_blk_image=/path/to/fs.img`。仿真 reset 第一次进入时会先用默认 `SBLK` pattern 填满 16 个 512B sector，再按 little-endian byte 顺序用镜像文件覆盖初始 disk 内容；镜像短于容量时只覆盖前缀，未覆盖部分保持默认 pattern。之后软件写盘只修改运行时 `disk`，再次 reset 会从 `disk_init` 恢复到镜像初值。未提供 plusarg 时行为与原来的 pattern 初始化一致。
 
@@ -360,7 +367,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/difftest_stubs.sv`
   - 为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
 - `vsrc/util/SimMemoryWithVirtio.sv`
-  - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO；支持 `+simple_blk_image=...` 从二进制镜像初始化 simple-block disk。
+  - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO；支持单 queue 的 descriptor/avail/used ring block read/write 子集，并支持 `+simple_blk_image=...` 从二进制镜像初始化 simple-block disk。
   - 新增 PLIC MMIO 模型，拦截 `0x0c000000` 到 `0x0fffffff`，支持 source priority、pending、M/S enable、threshold、claim/complete。
   - 新增 `0x10000000` 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、FCR trigger/clear、MCR、SCR、LSR overrun、THR TX 输出、THRE interrupt、RX FIFO timeout、16B RBR RX FIFO 和 RX/THRE/RLS interrupt 到 PLIC source 10。
 - `vsrc/SimTop.sv`
@@ -370,7 +377,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/uart_mmio_tb.sv`
   - 新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
 - `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
-  - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、未知命令/越界 sector 错误状态、512B sector write/read。
+  - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、未知命令/越界 sector 错误状态、virtqueue read/write、512B sector write/read。
 - `Makefile`
   - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-plic`、`test-labplus-uart` 和 `test-labplus-virtio`。
 - `ready-to-run/lab+/`
@@ -714,27 +721,43 @@ simple_block_image_read_status [OK]
 simple_block_image_read_data [OK]
 simple_block_unknown_cmd_status [OK]
 simple_block_oob_status [OK]
+virtio_queue_num_max [OK]
+virtio_status_driver_ok [OK]
+virtio_queue_read_status [OK]
+virtio_queue_read_used_idx [OK]
+virtio_queue_read_used_id [OK]
+virtio_queue_read_used_len [OK]
+virtio_queue_interrupt_status [OK]
+virtio_queue_read_data [OK]
+virtio_queue_interrupt_ack [OK]
+virtio_queue_write_status [OK]
+virtio_queue_write_used_idx [OK]
+virtio_queue_write_used_id [OK]
+virtio_queue_write_used_len [OK]
+virtio_queue_write_interrupt_status [OK]
+virtio_queue_write_verify_read_status [OK]
+virtio_queue_write_data [OK]
 simple_block_write_status [OK]
 simple_block_read_status [OK]
 simple virtio block MMIO test passed.
 ```
 
-测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 `+simple_blk_image=build/simple-virtio/simple-blk.img` 传给模型；reset 后读取 virtio magic/version/device/vendor 和 simple-block 容量寄存器；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 `cmd=99` 检查 `status=1`，再访问越界 `sector=16` 检查 `status=2`；最后通过 DPI RAM stub 在 RAM 中布置 512B pattern，向设备写 sector/mem/cmd=write，清空 RAM 后执行 cmd=read，并逐 word 检查 RAM 中 512B 数据被恢复。
+测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 `+simple_blk_image=build/simple-virtio/simple-blk.img` 传给模型；reset 后读取 virtio magic/version/device/vendor 和 simple-block 容量寄存器；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 `cmd=99` 检查 `status=1`，再访问越界 `sector=16` 检查 `status=2`；然后配置 queue 0，在 RAM 中构造三段 descriptor 链，覆盖 virtqueue read 的 status、used ring、interrupt status/ack 和数据内容；再用 virtqueue write 写回 sector 4，并用 simple read 回读确认 disk 被更新；最后保留原 simple sector write/read 路径，确认向后兼容。
 
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、可从镜像初始化的简化同步块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，并补了独立 page fault、S interrupt、PLIC、UART 和 simple-block 定向测试。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、可从镜像初始化且支持单 queue virtqueue 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，并补了独立 page fault、S interrupt、PLIC、UART 和 simple-block/virtqueue 定向测试。后续如果继续推进 xv6，需要补充：
 
-- 完整 virtio descriptor/avail/used ring。
+- 更完整的 virtio feature negotiation、indirect descriptor、event idx、多 queue 和 reset/config generation。
 - 更完整的 16550 parity/framing/break 等线状态错误。
-- 将完整 virtio queue 中断等更多真实设备事件接入 PLIC source。
+- 将更多真实设备事件和更细粒度的 virtio 中断状态接入 PLIC source。
 - 更完整的 I-cache/分支预测或多级流水线，用于进一步提升 `test-labplus-2` 性能。
 
 这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 8-entry PMP、atomic、virtio 简化模型和前端空泡优化，因此本次没有继续扩大范围。
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、可从镜像初始化的简化 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，以及独立 MMU page fault、S interrupt、PLIC、UART 和 simple-block 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、可从镜像初始化且支持单 queue virtqueue 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，以及独立 MMU page fault、S interrupt、PLIC、UART 和 simple-block/virtqueue 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 

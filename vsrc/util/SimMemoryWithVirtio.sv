@@ -33,6 +33,15 @@ module SimMemoryWithVirtio
     localparam addr_t VIRTIO_MASK = 64'hffff_ffff_ffff_fe00;
     localparam word_t VIRTIO_MAGIC_VERSION = {32'd2, 32'h7472_6976};
     localparam word_t VIRTIO_DEVICE_VENDOR = {32'h554d_4551, 32'd2};
+    localparam int VIRTQ_NUM_MAX = 8;
+    localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
+    localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
+    localparam u32 VIRTIO_MMIO_INT_VRING = 32'h0000_0001;
+    localparam u32 VIRTIO_BLK_T_IN = 32'd0;
+    localparam u32 VIRTIO_BLK_T_OUT = 32'd1;
+    localparam u8 VIRTIO_BLK_S_OK = 8'd0;
+    localparam u8 VIRTIO_BLK_S_IOERR = 8'd1;
+    localparam u8 VIRTIO_BLK_S_UNSUPP = 8'd2;
     localparam int SIMPLE_BLK_SECTORS = 16;
     localparam int SIMPLE_BLK_WORDS_PER_SECTOR = 64;
     localparam int SIMPLE_BLK_WORDS = SIMPLE_BLK_SECTORS * SIMPLE_BLK_WORDS_PER_SECTOR;
@@ -49,6 +58,11 @@ module SimMemoryWithVirtio
     logic local_req_active;
     logic ram_exint, plic_irq_m, plic_irq_s;
     word_t blk_sector, blk_mem_addr, blk_cmd, blk_status;
+    u32 virt_device_features_sel, virt_driver_features_sel;
+    u32 virt_driver_features, virt_queue_sel, virt_queue_num, virt_queue_ready, virt_status;
+    u32 virt_interrupt_status;
+    addr_t virt_queue_desc, virt_queue_driver, virt_queue_device;
+    u16 virt_last_avail_idx;
     word_t disk_init [SIMPLE_BLK_WORDS];
     word_t disk [SIMPLE_BLK_WORDS];
     byte unsigned blk_image_bytes [SIMPLE_BLK_BYTES];
@@ -196,6 +210,61 @@ module SimMemoryWithVirtio
             default: size_strobe = 8'b1111_1111;
         endcase
     endfunction
+
+    function automatic u8 ram_read_byte_addr(input addr_t addr);
+        word_t data;
+        int shift;
+        begin
+            data = word_t'(ram_read_helper(1'b1, ram_idx(addr)));
+            shift = int'(addr[2:0]) * 8;
+            ram_read_byte_addr = u8'(data >> shift);
+        end
+    endfunction
+
+    function automatic u16 ram_read_u16_addr(input addr_t addr);
+        ram_read_u16_addr = '0;
+        for (int byte_idx = 0; byte_idx < 2; byte_idx += 1) begin
+            ram_read_u16_addr[byte_idx * 8 +: 8] = ram_read_byte_addr(addr + 64'(byte_idx));
+        end
+    endfunction
+
+    function automatic u32 ram_read_u32_addr(input addr_t addr);
+        ram_read_u32_addr = '0;
+        for (int byte_idx = 0; byte_idx < 4; byte_idx += 1) begin
+            ram_read_u32_addr[byte_idx * 8 +: 8] = ram_read_byte_addr(addr + 64'(byte_idx));
+        end
+    endfunction
+
+    function automatic word_t ram_read_u64_addr(input addr_t addr);
+        ram_read_u64_addr = '0;
+        for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+            ram_read_u64_addr[byte_idx * 8 +: 8] = ram_read_byte_addr(addr + 64'(byte_idx));
+        end
+    endfunction
+
+    task automatic ram_write_byte_addr(input addr_t addr, input u8 data);
+        int shift;
+        word_t write_data;
+        word_t write_mask;
+        begin
+            shift = int'(addr[2:0]) * 8;
+            write_data = word_t'({56'd0, data}) << shift;
+            write_mask = 64'h0000_0000_0000_00ff << shift;
+            ram_write_helper(ram_idx(addr), write_data, write_mask, 1'b1);
+        end
+    endtask
+
+    task automatic ram_write_u16_addr(input addr_t addr, input u16 data);
+        for (int byte_idx = 0; byte_idx < 2; byte_idx += 1) begin
+            ram_write_byte_addr(addr + 64'(byte_idx), data[byte_idx * 8 +: 8]);
+        end
+    endtask
+
+    task automatic ram_write_u32_addr(input addr_t addr, input u32 data);
+        for (int byte_idx = 0; byte_idx < 4; byte_idx += 1) begin
+            ram_write_byte_addr(addr + 64'(byte_idx), data[byte_idx * 8 +: 8]);
+        end
+    endtask
 
     function automatic u8 uart_reg_read_byte(input addr_t addr);
         logic [7:0] offset;
@@ -555,19 +624,177 @@ module SimMemoryWithVirtio
         end
     endtask
 
+    task automatic read_virtq_desc(
+        input u16 index,
+        output addr_t desc_addr,
+        output u32 desc_len,
+        output u16 desc_flags,
+        output u16 desc_next
+    );
+        addr_t base;
+        begin
+            base = virt_queue_desc + 64'(index) * 64'd16;
+            desc_addr = ram_read_u64_addr(base);
+            desc_len = ram_read_u32_addr(base + 64'd8);
+            desc_flags = ram_read_u16_addr(base + 64'd12);
+            desc_next = ram_read_u16_addr(base + 64'd14);
+        end
+    endtask
+
+    task automatic complete_virtqueue_request(input u16 head, input u32 used_len);
+        u16 used_idx;
+        u16 used_slot;
+        addr_t used_elem_addr;
+        begin
+            used_idx = ram_read_u16_addr(virt_queue_device + 64'd2);
+            used_slot = u16'(used_idx % u16'(virt_queue_num[15:0]));
+            used_elem_addr = virt_queue_device + 64'd4 + 64'(used_slot) * 64'd8;
+            ram_write_u32_addr(used_elem_addr, {16'd0, head});
+            ram_write_u32_addr(used_elem_addr + 64'd4, used_len);
+            ram_write_u16_addr(virt_queue_device + 64'd2, used_idx + 16'd1);
+            virt_last_avail_idx <= virt_last_avail_idx + 16'd1;
+            virt_interrupt_status <= virt_interrupt_status | VIRTIO_MMIO_INT_VRING;
+            plic_pending[PLIC_VIRTIO_SOURCE] <= 1'b1;
+        end
+    endtask
+
+    task automatic run_virtqueue_command(input u32 queue_notify);
+        u16 avail_idx;
+        u16 avail_slot;
+        u16 head;
+        addr_t desc0_addr, desc1_addr, desc2_addr;
+        u32 desc0_len, desc1_len, desc2_len;
+        u16 desc0_flags, desc1_flags, desc2_flags;
+        u16 desc0_next, desc1_next, desc2_next;
+        u32 req_type;
+        word_t req_sector;
+        u8 status;
+        u32 used_len;
+        int disk_base_word;
+        word_t write_word;
+        begin
+            if ((queue_notify != 32'd0) || (virt_queue_sel != 32'd0) ||
+                (virt_queue_ready == 32'd0) || (virt_queue_num == 32'd0) ||
+                (virt_queue_num > u32'(VIRTQ_NUM_MAX))) begin
+                return;
+            end
+
+            avail_idx = ram_read_u16_addr(virt_queue_driver + 64'd2);
+            if (avail_idx == virt_last_avail_idx) begin
+                return;
+            end
+
+            avail_slot = u16'(virt_last_avail_idx % u16'(virt_queue_num[15:0]));
+            head = ram_read_u16_addr(virt_queue_driver + 64'd4 + 64'(avail_slot) * 64'd2);
+            if (head >= u16'(virt_queue_num[15:0])) begin
+                return;
+            end
+
+            read_virtq_desc(head, desc0_addr, desc0_len, desc0_flags, desc0_next);
+            read_virtq_desc(desc0_next, desc1_addr, desc1_len, desc1_flags, desc1_next);
+            read_virtq_desc(desc1_next, desc2_addr, desc2_len, desc2_flags, desc2_next);
+            req_type = ram_read_u32_addr(desc0_addr);
+            req_sector = ram_read_u64_addr(desc0_addr + 64'd8);
+            status = VIRTIO_BLK_S_IOERR;
+            used_len = 32'd1;
+
+            if (((desc0_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
+                ((desc1_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
+                (desc0_next >= u16'(virt_queue_num[15:0])) ||
+                (desc1_next >= u16'(virt_queue_num[15:0])) ||
+                (desc0_len < 32'd16) || (desc1_len < 32'd512) || (desc2_len < 32'd1) ||
+                ((desc2_flags & VIRTQ_DESC_F_WRITE) == 16'd0) ||
+                (req_sector >= 64'(SIMPLE_BLK_SECTORS))) begin
+                status = VIRTIO_BLK_S_IOERR;
+            end
+            else if (req_type == VIRTIO_BLK_T_IN) begin
+                if ((desc1_flags & VIRTQ_DESC_F_WRITE) != VIRTQ_DESC_F_WRITE) begin
+                    status = VIRTIO_BLK_S_IOERR;
+                end
+                else begin
+                    disk_base_word = int'(req_sector[31:0]) * SIMPLE_BLK_WORDS_PER_SECTOR;
+                    for (int word_idx = 0; word_idx < SIMPLE_BLK_WORDS_PER_SECTOR; word_idx += 1) begin
+                        for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+                            ram_write_byte_addr(
+                                desc1_addr + 64'(word_idx * 8 + byte_idx),
+                                disk[disk_base_word + word_idx][byte_idx * 8 +: 8]
+                            );
+                        end
+                    end
+                    status = VIRTIO_BLK_S_OK;
+                    used_len = 32'd513;
+                end
+            end
+            else if (req_type == VIRTIO_BLK_T_OUT) begin
+                if ((desc1_flags & VIRTQ_DESC_F_WRITE) != 16'd0) begin
+                    status = VIRTIO_BLK_S_IOERR;
+                end
+                else begin
+                    disk_base_word = int'(req_sector[31:0]) * SIMPLE_BLK_WORDS_PER_SECTOR;
+                    for (int word_idx = 0; word_idx < SIMPLE_BLK_WORDS_PER_SECTOR; word_idx += 1) begin
+                        write_word = '0;
+                        for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+                            write_word[byte_idx * 8 +: 8] =
+                                ram_read_byte_addr(desc1_addr + 64'(word_idx * 8 + byte_idx));
+                        end
+                        disk[disk_base_word + word_idx] <= write_word;
+                    end
+                    status = VIRTIO_BLK_S_OK;
+                end
+            end
+            else begin
+                status = VIRTIO_BLK_S_UNSUPP;
+            end
+
+            ram_write_byte_addr(desc2_addr, status);
+            blk_status <= {56'd0, status};
+            complete_virtqueue_request(head, used_len);
+        end
+    endtask
+
+    function automatic u32 virtio_reg32_read(input addr_t addr);
+        addr_t offset;
+        begin
+            offset = addr - VIRTIO_BASE;
+            unique case (offset)
+                64'h000: virtio_reg32_read = 32'h7472_6976;
+                64'h004: virtio_reg32_read = 32'd2;
+                64'h008: virtio_reg32_read = 32'd2;
+                64'h00c: virtio_reg32_read = 32'h554d_4551;
+                64'h010: virtio_reg32_read = 32'd0;
+                64'h014: virtio_reg32_read = virt_device_features_sel;
+                64'h020: virtio_reg32_read = virt_driver_features;
+                64'h024: virtio_reg32_read = virt_driver_features_sel;
+                64'h030: virtio_reg32_read = virt_queue_sel;
+                64'h034: virtio_reg32_read = (virt_queue_sel == 32'd0) ? u32'(VIRTQ_NUM_MAX) : 32'd0;
+                64'h038: virtio_reg32_read = virt_queue_num;
+                64'h044: virtio_reg32_read = virt_queue_ready;
+                64'h060: virtio_reg32_read = virt_interrupt_status;
+                64'h070: virtio_reg32_read = virt_status;
+                64'h080: virtio_reg32_read = virt_queue_desc[31:0];
+                64'h084: virtio_reg32_read = virt_queue_desc[63:32];
+                64'h090: virtio_reg32_read = virt_queue_driver[31:0];
+                64'h094: virtio_reg32_read = virt_queue_driver[63:32];
+                64'h0a0: virtio_reg32_read = virt_queue_device[31:0];
+                64'h0a4: virtio_reg32_read = virt_queue_device[63:32];
+                64'h0fc: virtio_reg32_read = 32'd0;
+                64'h100: virtio_reg32_read = u32'(SIMPLE_BLK_SECTORS);
+                64'h104: virtio_reg32_read = 32'd0;
+                64'h114: virtio_reg32_read = 32'd512;
+                64'h118: virtio_reg32_read = u32'(blk_status);
+                64'h120: virtio_reg32_read = u32'(SIMPLE_BLK_SECTORS);
+                64'h128: virtio_reg32_read = 32'd512;
+                default: virtio_reg32_read = 32'd0;
+            endcase
+        end
+    endfunction
+
     function automatic word_t virtio_read(input addr_t addr);
-        unique case (addr & 64'hffff_ffff_ffff_fff8)
-            VIRTIO_BASE + 64'h000: virtio_read = VIRTIO_MAGIC_VERSION;
-            VIRTIO_BASE + 64'h008: virtio_read = VIRTIO_DEVICE_VENDOR;
-            VIRTIO_BASE + 64'h010: virtio_read = 64'd0;
-            VIRTIO_BASE + 64'h100: virtio_read = blk_sector;
-            VIRTIO_BASE + 64'h108: virtio_read = blk_mem_addr;
-            VIRTIO_BASE + 64'h110: virtio_read = blk_cmd;
-            VIRTIO_BASE + 64'h118: virtio_read = blk_status;
-            VIRTIO_BASE + 64'h120: virtio_read = 64'(SIMPLE_BLK_SECTORS);
-            VIRTIO_BASE + 64'h128: virtio_read = 64'd512;
-            default:               virtio_read = 64'd0;
-        endcase
+        addr_t aligned_addr;
+        begin
+            aligned_addr = {addr[63:3], 3'b000};
+            virtio_read = {virtio_reg32_read(aligned_addr + 64'd4), virtio_reg32_read(aligned_addr)};
+        end
     endfunction
 
     task automatic run_block_command(input word_t cmd);
@@ -602,14 +829,60 @@ module SimMemoryWithVirtio
         end
     endtask
 
-    task automatic virtio_write(input addr_t addr, input word_t data);
-        unique case (addr & 64'hffff_ffff_ffff_fff8)
-            VIRTIO_BASE + 64'h100: blk_sector <= data;
-            VIRTIO_BASE + 64'h108: blk_mem_addr <= data;
-            VIRTIO_BASE + 64'h110: run_block_command(data);
-            VIRTIO_BASE + 64'h118: blk_status <= data;
-            default: begin end
-        endcase
+    task automatic virtio_write32(input addr_t addr, input u32 data);
+        addr_t offset;
+        begin
+            offset = addr - VIRTIO_BASE;
+            unique case (offset)
+                64'h014: virt_device_features_sel <= data;
+                64'h020: virt_driver_features <= data;
+                64'h024: virt_driver_features_sel <= data;
+                64'h030: virt_queue_sel <= data;
+                64'h038: virt_queue_num <= data;
+                64'h044: virt_queue_ready <= data;
+                64'h050: run_virtqueue_command(data);
+                64'h064: virt_interrupt_status <= virt_interrupt_status & ~data;
+                64'h070: begin
+                    virt_status <= data;
+                    if (data == 32'd0) begin
+                        virt_queue_sel <= 32'd0;
+                        virt_queue_num <= 32'd0;
+                        virt_queue_ready <= 32'd0;
+                        virt_queue_desc <= 64'd0;
+                        virt_queue_driver <= 64'd0;
+                        virt_queue_device <= 64'd0;
+                        virt_last_avail_idx <= 16'd0;
+                        virt_interrupt_status <= 32'd0;
+                    end
+                end
+                64'h080: virt_queue_desc[31:0] <= data;
+                64'h084: virt_queue_desc[63:32] <= data;
+                64'h090: virt_queue_driver[31:0] <= data;
+                64'h094: virt_queue_driver[63:32] <= data;
+                64'h0a0: virt_queue_device[31:0] <= data;
+                64'h0a4: virt_queue_device[63:32] <= data;
+                64'h100: blk_sector[31:0] <= data;
+                64'h104: blk_sector[63:32] <= data;
+                64'h108: blk_mem_addr[31:0] <= data;
+                64'h10c: blk_mem_addr[63:32] <= data;
+                64'h110: run_block_command({32'd0, data});
+                64'h118: blk_status <= {32'd0, data};
+                default: begin end
+            endcase
+        end
+    endtask
+
+    task automatic virtio_write(input addr_t addr, input word_t data, input strobe_t strobe);
+        addr_t aligned_addr;
+        begin
+            aligned_addr = {addr[63:3], 3'b000};
+            if (|strobe[3:0]) begin
+                virtio_write32(aligned_addr, data[31:0]);
+            end
+            if (|strobe[7:4]) begin
+                virtio_write32(aligned_addr + 64'd4, data[63:32]);
+            end
+        end
     endtask
 
     assign plic_irq_m = (plic_best_source(1'b0) != 0);
@@ -652,6 +925,18 @@ module SimMemoryWithVirtio
             blk_mem_addr <= 64'h0000_0000_8000_1000;
             blk_cmd <= 64'd0;
             blk_status <= 64'd0;
+            virt_device_features_sel <= 32'd0;
+            virt_driver_features_sel <= 32'd0;
+            virt_driver_features <= 32'd0;
+            virt_queue_sel <= 32'd0;
+            virt_queue_num <= 32'd0;
+            virt_queue_ready <= 32'd0;
+            virt_status <= 32'd0;
+            virt_interrupt_status <= 32'd0;
+            virt_queue_desc <= 64'd0;
+            virt_queue_driver <= 64'd0;
+            virt_queue_device <= 64'd0;
+            virt_last_avail_idx <= 16'd0;
             plic_threshold_m <= 64'd0;
             plic_threshold_s <= 64'd0;
             plic_pending <= '0;
@@ -747,7 +1032,7 @@ module SimMemoryWithVirtio
                 end
                 else if (is_virtio_addr(oreq.addr)) begin
                     if (oreq.is_write && |oreq.strobe) begin
-                        virtio_write(oreq.addr, oreq.data);
+                        virtio_write(oreq.addr, oreq.data, oreq.strobe);
                     end
                 end
                 else if (is_plic_addr(oreq.addr)) begin
