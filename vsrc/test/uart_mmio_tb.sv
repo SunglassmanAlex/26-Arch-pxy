@@ -293,6 +293,21 @@ module uart_mmio_tb
         write8(UART_IIR_FCR, 8'h03, 1'b0, 8'd0, "uart_fcr_clear_overrun_fifo");
         expect8(UART_LSR, 8'h60, "uart_lsr_overrun_fifo_cleared");
         expect8(UART_IIR_FCR, 8'h01, "uart_iir_overrun_fifo_cleared");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_overrun_claim");
+        expect_exint(1'b0, "plic_uart_overrun_claim_clears_exint");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_overrun_complete");
+
+        write8(UART_IER_DLM, 8'h02, 1'b0, 8'd0, "uart_ier_enable_thre");
+        expect_exint(1'b1, "plic_uart_thre_exint");
+        expect8(UART_IIR_FCR, 8'h02, "uart_iir_thre_pending");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_thre_read_clear");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_thre_claim");
+        expect_exint(1'b0, "plic_uart_thre_claim_clears_exint");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_thre_complete");
+        write8(UART_RBR_THR_DLL, 8'h54, 1'b1, 8'h54, "uart_tx_T_thre_irq");
+        expect8(UART_IIR_FCR, 8'h02, "uart_iir_thre_after_tx");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_thre_tx_claim");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_thre_tx_complete");
 
         $display("UART MMIO directed tests passed.");
         $finish;
