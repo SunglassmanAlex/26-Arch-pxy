@@ -375,6 +375,7 @@ module simple_virtio_block_tb
         expect_read32(VIRTIO_BASE + 64'h108, 32'd512, "virtio_config_size_max");
         expect_read32(VIRTIO_BASE + 64'h10c, 32'd1, "virtio_config_seg_max");
         expect_read32(VIRTIO_BASE + 64'h114, 32'd512, "virtio_config_blk_size");
+        expect_read32(VIRTIO_BASE + 64'h0fc, 32'd0, "virtio_config_generation_initial");
 
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(DMA_ADDR + 64'(word_idx * 8), 64'd0);
@@ -544,7 +545,17 @@ module simple_virtio_block_tb
             end
         end
         $display("virtio_event_idx_triggered_read_data [OK]");
-        cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
+        cbus_write32(VIRTIO_BASE + 64'h070, 32'd0);
+        expect_read32(VIRTIO_BASE + 64'h070, 32'd0, "virtio_reset_status");
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd0, "virtio_reset_interrupt_status");
+        expect_read32(VIRTIO_BASE + 64'h014, 32'd0, "virtio_reset_device_features_sel");
+        expect_read32(VIRTIO_BASE + 64'h020, 32'd0, "virtio_reset_driver_features");
+        expect_read32(VIRTIO_BASE + 64'h024, 32'd0, "virtio_reset_driver_features_sel");
+        expect_read32(VIRTIO_BASE + 64'h038, 32'd0, "virtio_reset_queue_num");
+        expect_read32(VIRTIO_BASE + 64'h044, 32'd0, "virtio_reset_queue_ready");
+        expect_read32(VIRTIO_BASE + 64'h080, 32'd0, "virtio_reset_queue_desc_low");
+        expect_read32(VIRTIO_BASE + 64'h0fc, 32'd0, "virtio_config_generation_after_reset");
+        expect_read(VIRTIO_BASE + 64'h118, 64'd0, "virtio_reset_simple_block_status");
 
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(DMA_ADDR + 64'(word_idx * 8), pattern(word_idx));

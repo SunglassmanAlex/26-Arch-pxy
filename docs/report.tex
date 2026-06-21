@@ -33,7 +33,7 @@
   \item 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
   \item 新增 \texttt{SUM/MXR} 支持：\texttt{MXR} 允许 load 读取 execute-only 页，\texttt{SUM} 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
   \item 新增 PTE A/D 位硬件更新：叶子 PTE 的 \texttt{A=0} 或写访问 \texttt{D=0} 时，MMU 先写回更新后的 PTE，再继续最终访存。
-  \item 新增仿真侧 virtio/disk MMIO：在 \texttt{0x10001000} 暴露 virtio-mmio 识别寄存器和 virtio-blk config 字段，提供基础 feature negotiation，提供同步 512B sector 读写扩展，支持单 queue 的 descriptor/avail/used ring、indirect descriptor 和 event idx 中断抑制/触发子集，并支持 \texttt{+simple\_blk\_image=...} 从二进制镜像初始化 disk。
+  \item 新增仿真侧 virtio/disk MMIO：在 \texttt{0x10001000} 暴露 virtio-mmio 识别寄存器、\texttt{ConfigGeneration} 和 virtio-blk config 字段，提供基础 feature negotiation，提供同步 512B sector 读写扩展，支持 \texttt{Status=0} reset、单 queue 的 descriptor/avail/used ring、indirect descriptor 和 event idx 中断抑制/触发子集，并支持 \texttt{+simple\_blk\_image=...} 从二进制镜像初始化 disk。
   \item 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1。
   \item 新增仿真侧 16550 UART MMIO 模型：在 \texttt{0x10000000} 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear 和 LSR overrun，并将 UART interrupt 接到 PLIC source 10。
   \item 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
@@ -198,6 +198,7 @@ RISC-V Sv39 的叶子 PTE 中，\texttt{A} 表示 accessed，\texttt{D} 表示 d
 \begin{itemize}
   \item \texttt{0x10001000}：低 32 位为 virtio magic \texttt{0x74726976}，高 32 位为 version \texttt{2}。
   \item \texttt{0x10001008}：低 32 位为 device id \texttt{2}，表示 block device；高 32 位为 vendor \texttt{0x554d4551}。
+  \item \texttt{0x100010fc}：\texttt{ConfigGeneration}，当前 block config 为静态配置，因此 reset 前后保持 \texttt{0}。
   \item 标准 virtio-blk config 读字段：\texttt{0x10001100/0x10001104} 为 64-bit capacity，当前 16 sectors；\texttt{0x10001108} 为 \texttt{size\_max=512}；\texttt{0x1000110c} 为 \texttt{seg\_max=1}；\texttt{0x10001114} 为 \texttt{blk\_size=512}。
 \end{itemize}
 
@@ -221,9 +222,10 @@ RISC-V Sv39 的叶子 PTE 中，\texttt{A} 表示 accessed，\texttt{D} 表示 d
   \item 当 head descriptor 带 \texttt{VIRTQ\_DESC\_F\_INDIRECT} 时，将其 \texttt{addr/len} 解释为 indirect descriptor table，并从 table 内继续解析三段链。
   \item 支持 \texttt{VIRTIO\_BLK\_T\_IN=0} 从 disk 读入 driver writable buffer，支持 \texttt{VIRTIO\_BLK\_T\_OUT=1} 从 driver buffer 写回 disk；完成后写 status byte、used ring element 和 used idx。
   \item 完成 queue 请求后更新 used ring。未协商 \texttt{VIRTIO\_RING\_F\_EVENT\_IDX} 时遵守 avail flags 的 \texttt{NO\_INTERRUPT} 位；协商后读取 avail ring 末尾的 \texttt{used\_event}，按 \texttt{vring\_need\_event} 规则决定是否置位 \texttt{InterruptStatus[0]} 和 PLIC source 1 pending；软件可通过 \texttt{InterruptACK} 清除 virtio 中断状态。
+  \item 支持软件向 \texttt{Status} 写 0 触发设备 reset：清空 driver/device feature selector、driver features、queue 配置、used ring 进度、virtio interrupt status、virtio PLIC pending 和 simple-block 命令状态，但不清除 disk 内容或静态 block config。
 \end{itemize}
 
-该 queue 子集已经覆盖 feature negotiation、descriptor/avail/used ring 的基本读写路径、indirect descriptor 链和 event idx 中断节流，但还没有实现多 queue、更完整的 block feature 组合和 reset 后设备配置版本管理。
+该 queue 子集已经覆盖 feature negotiation、descriptor/avail/used ring 的基本读写路径、indirect descriptor 链、event idx 中断节流和基础设备 reset，但还没有实现多 queue、更完整的 block feature 组合和动态配置变更通知。
 
 为了让该同步块设备能承载更接近 xv6 的文件系统内容，模型额外支持运行时 plusarg：\texttt{+simple\_blk\_image=/path/to/fs.img}。仿真 reset 第一次进入时会先用默认 \texttt{SBLK} pattern 填满 16 个 512B sector，再按 little-endian byte 顺序用镜像文件覆盖初始 disk 内容；镜像短于容量时只覆盖前缀，未覆盖部分保持默认 pattern。之后软件写盘只修改运行时 \texttt{disk}，再次 reset 会从 \texttt{disk\_init} 恢复到镜像初值。未提供 plusarg 时行为与原来的 pattern 初始化一致。
 
@@ -335,11 +337,11 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   \item \texttt{vsrc/test/mmu\_page\_fault\_tb.sv}：新增独立 Verilator testbench，直接实例化 \texttt{MMU}；构造固定三层 Sv39 页表，验证 instruction/load/store page fault 与正常 load 翻译。
   \item \texttt{vsrc/test/s\_interrupt\_pending\_tb.sv}：新增独立 core 级 Verilator testbench，用手写 CSR 指令初始化委托和 S 态中断使能；验证 \texttt{trint} 在 \texttt{mideleg.STIP=1}、\texttt{mie.STIE=1}、\texttt{mstatus.SIE=1} 后进入 S trap，\texttt{scause} 为 interrupt cause 5。
   \item \texttt{vsrc/test/difftest\_stubs.sv}：为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
-  \item \texttt{vsrc/util/SimMemoryWithVirtio.sv}：新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 \texttt{0x10001000} virtio/simple-block MMIO；支持 virtio-blk config 读字段、基础 feature negotiation、单 queue 的 descriptor/avail/used ring、indirect descriptor 和 event idx block read/write 子集，并支持 \texttt{+simple\_blk\_image=...} 从二进制镜像初始化 simple-block disk；新增 PLIC MMIO 模型，拦截 \texttt{0x0c000000} 到 \texttt{0x0fffffff}，支持 source priority、pending、M/S enable、threshold、claim/complete；新增 \texttt{0x10000000} 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、FCR trigger/clear、MCR、SCR、LSR overrun、THR TX 输出、THRE interrupt、RX FIFO timeout、16B RBR RX FIFO 和 RX/THRE/RLS interrupt 到 PLIC source 10。
+  \item \texttt{vsrc/util/SimMemoryWithVirtio.sv}：新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 \texttt{0x10001000} virtio/simple-block MMIO；支持 virtio-blk config 读字段、\texttt{ConfigGeneration}、基础 feature negotiation、\texttt{Status=0} reset、单 queue 的 descriptor/avail/used ring、indirect descriptor 和 event idx block read/write 子集，并支持 \texttt{+simple\_blk\_image=...} 从二进制镜像初始化 simple-block disk；新增 PLIC MMIO 模型，拦截 \texttt{0x0c000000} 到 \texttt{0x0fffffff}，支持 source priority、pending、M/S enable、threshold、claim/complete；新增 \texttt{0x10000000} 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、FCR trigger/clear、MCR、SCR、LSR overrun、THR TX 输出、THRE interrupt、RX FIFO timeout、16B RBR RX FIFO 和 RX/THRE/RLS interrupt 到 PLIC source 10。
   \item \texttt{vsrc/SimTop.sv}：将仿真 UART TX/RX 端口接到 difftest 顶层 \texttt{io\_uart\_out\_valid/io\_uart\_out\_ch/io\_uart\_in\_*}。
   \item \texttt{vsrc/test/plic\_mmio\_tb.sv}：新增 PLIC MMIO 定向测试，覆盖 priority、pending、M/S enable、M/S threshold、claim/complete，以及 virtio source 1 中断注入。
   \item \texttt{vsrc/test/uart\_mmio\_tb.sv}：新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
-  \item \texttt{vsrc/test/simple\_virtio\_block\_tb.sv}、\texttt{vsrc/test/ram\_dpi\_stubs.cpp}：新增 simple-block MMIO 定向测试和 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、未知命令/越界 sector 错误状态、feature negotiation、virtqueue read/write、indirect descriptor read、event idx 抑制/触发中断、512B sector write/read。
+  \item \texttt{vsrc/test/simple\_virtio\_block\_tb.sv}、\texttt{vsrc/test/ram\_dpi\_stubs.cpp}：新增 simple-block MMIO 定向测试和 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、\texttt{ConfigGeneration}、未知命令/越界 sector 错误状态、feature negotiation、virtqueue read/write、indirect descriptor read、event idx 抑制/触发中断、\texttt{Status=0} reset、512B sector write/read。
   \item \texttt{Makefile}：新增 \texttt{test-labplus-2}、\texttt{test-labplus-3}、\texttt{test-labplus-4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart} 和 \texttt{test-labplus-virtio}。
   \item \texttt{ready-to-run/lab+/}：补充官方 Lab+ 测试二进制和汇编反汇编文件。
 \end{itemize}
@@ -608,6 +610,7 @@ virtio_config_capacity_high [OK]
 virtio_config_size_max [OK]
 virtio_config_seg_max [OK]
 virtio_config_blk_size [OK]
+virtio_config_generation_initial [OK]
 simple_block_image_read_status [OK]
 simple_block_image_read_data [OK]
 simple_block_unknown_cmd_status [OK]
@@ -647,19 +650,29 @@ virtio_event_idx_triggered_status [OK]
 virtio_event_idx_triggered_used_idx [OK]
 virtio_event_idx_triggers_interrupt [OK]
 virtio_event_idx_triggered_read_data [OK]
+virtio_reset_status [OK]
+virtio_reset_interrupt_status [OK]
+virtio_reset_device_features_sel [OK]
+virtio_reset_driver_features [OK]
+virtio_reset_driver_features_sel [OK]
+virtio_reset_queue_num [OK]
+virtio_reset_queue_ready [OK]
+virtio_reset_queue_desc_low [OK]
+virtio_config_generation_after_reset [OK]
+virtio_reset_simple_block_status [OK]
 simple_block_write_status [OK]
 simple_block_read_status [OK]
 simple virtio block MMIO test passed.
 \end{Verbatim}
 
-测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 \texttt{+simple\_blk\_image=build/simple-virtio/simple-blk.img} 传给模型；reset 后读取 virtio magic/version/device/vendor、simple-block 容量寄存器和标准 virtio-blk config 字段；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 \texttt{cmd=99} 检查 \texttt{status=1}，再访问越界 \texttt{sector=16} 检查 \texttt{status=2}；然后读取 feature bank 0/1，验证 unsupported feature 会使 \texttt{FEATURES\_OK} 被清除，再协商 indirect descriptor、event idx 和 version 1；之后配置 queue 0，在 RAM 中构造三段 descriptor 链，覆盖 virtqueue read 的 status、used ring、interrupt status/ack 和数据内容；再用 virtqueue write 写回 sector 4，并用 simple read 回读确认 disk 被更新；随后构造带 \texttt{VIRTQ\_DESC\_F\_INDIRECT} 的 head descriptor，验证 indirect table 内三段链也能完成读请求；最后设置 used\_event 分别覆盖一次中断被抑制和一次中断被触发的 event idx 路径，并保留原 simple sector write/read 路径，确认向后兼容。
+测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 \texttt{+simple\_blk\_image=build/simple-virtio/simple-blk.img} 传给模型；reset 后读取 virtio magic/version/device/vendor、simple-block 容量寄存器、\texttt{ConfigGeneration} 和标准 virtio-blk config 字段；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 \texttt{cmd=99} 检查 \texttt{status=1}，再访问越界 \texttt{sector=16} 检查 \texttt{status=2}；然后读取 feature bank 0/1，验证 unsupported feature 会使 \texttt{FEATURES\_OK} 被清除，再协商 indirect descriptor、event idx 和 version 1；之后配置 queue 0，在 RAM 中构造三段 descriptor 链，覆盖 virtqueue read 的 status、used ring、interrupt status/ack 和数据内容；再用 virtqueue write 写回 sector 4，并用 simple read 回读确认 disk 被更新；随后构造带 \texttt{VIRTQ\_DESC\_F\_INDIRECT} 的 head descriptor，验证 indirect table 内三段链也能完成读请求；再设置 used\_event 分别覆盖一次中断被抑制和一次中断被触发的 event idx 路径；随后向 \texttt{Status} 写 0，确认 status、interrupt status、feature selector、driver features、queue 配置、config generation 和 simple-block status 符合 reset 后状态；最后保留原 simple sector write/read 路径，确认向后兼容。
 
 \section{后续可做项}
 
-本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/indirect descriptor/event idx 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，并补了独立 page fault、S interrupt、PLIC、UART 和 simple-block/virtqueue 定向测试。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/indirect descriptor/event idx/reset 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，并补了独立 page fault、S interrupt、PLIC、UART 和 simple-block/virtqueue 定向测试。后续如果继续推进 xv6，需要补充：
 
 \begin{itemize}
-  \item 更完整的 virtio block feature 组合、多 queue、packed queue 和 reset/config generation。
+  \item 更完整的 virtio block feature 组合、多 queue、packed queue 和动态配置变更通知。
   \item 更完整的 16550 parity/framing/break 等线状态错误。
   \item 将更多真实设备事件和更细粒度的 virtio 中断状态接入 PLIC source。
   \item 更完整的 I-cache/分支预测或多级流水线，用于进一步提升 \texttt{test-labplus-2} 性能。
@@ -669,7 +682,7 @@ simple virtio block MMIO test passed.
 
 \section{总结}
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I} 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、\texttt{SUM/MXR} 权限补充、PTE A/D 位硬件更新、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/indirect descriptor/event idx 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，以及独立 MMU page fault、S interrupt、PLIC、UART 和 simple-block/virtqueue 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I} 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、\texttt{SUM/MXR} 权限补充、PTE A/D 位硬件更新、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/indirect descriptor/event idx/reset 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，以及独立 MMU page fault、S interrupt、PLIC、UART 和 simple-block/virtqueue 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 \section{AI 使用说明}
 
