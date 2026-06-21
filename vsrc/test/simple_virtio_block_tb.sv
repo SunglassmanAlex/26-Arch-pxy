@@ -19,9 +19,15 @@ module simple_virtio_block_tb
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
     localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
     localparam u16 VIRTQ_DESC_F_INDIRECT = 16'h0004;
+    localparam u32 VIRTIO_FEATURE_BLK_SIZE_MAX = 32'h0000_0002;
+    localparam u32 VIRTIO_FEATURE_BLK_SEG_MAX = 32'h0000_0004;
+    localparam u32 VIRTIO_FEATURE_BLK_SIZE = 32'h0000_0040;
     localparam u32 VIRTIO_FEATURE_INDIRECT = 32'h1000_0000;
     localparam u32 VIRTIO_FEATURE_EVENT_IDX = 32'h2000_0000;
-    localparam u32 VIRTIO_FEATURE_RING = VIRTIO_FEATURE_INDIRECT | VIRTIO_FEATURE_EVENT_IDX;
+    localparam u32 VIRTIO_FEATURE_BLK =
+        VIRTIO_FEATURE_BLK_SIZE_MAX | VIRTIO_FEATURE_BLK_SEG_MAX | VIRTIO_FEATURE_BLK_SIZE;
+    localparam u32 VIRTIO_FEATURE_SEL0 =
+        VIRTIO_FEATURE_BLK | VIRTIO_FEATURE_INDIRECT | VIRTIO_FEATURE_EVENT_IDX;
     localparam u32 VIRTIO_FEATURE_VERSION_1 = 32'h0000_0001;
     localparam u32 VIRTIO_STATUS_ACK_DRIVER = 32'h0000_0003;
     localparam u32 VIRTIO_STATUS_FEATURES_OK = 32'h0000_0008;
@@ -287,7 +293,7 @@ module simple_virtio_block_tb
         ram_write_u16(VQ_USED_ADDR + 64'd2, 16'd0);
         cbus_write32(VIRTIO_BASE + 64'h070, 32'd0);
         cbus_write32(VIRTIO_BASE + 64'h014, 32'd0);
-        expect_read32(VIRTIO_BASE + 64'h010, VIRTIO_FEATURE_RING, "virtio_features_ring");
+        expect_read32(VIRTIO_BASE + 64'h010, VIRTIO_FEATURE_SEL0, "virtio_features_sel0");
         cbus_write32(VIRTIO_BASE + 64'h014, 32'd1);
         expect_read32(VIRTIO_BASE + 64'h010, VIRTIO_FEATURE_VERSION_1, "virtio_features_version1");
         cbus_write32(VIRTIO_BASE + 64'h024, 32'd0);
@@ -300,11 +306,11 @@ module simple_virtio_block_tb
         );
         cbus_write32(VIRTIO_BASE + 64'h070, 32'd0);
         cbus_write32(VIRTIO_BASE + 64'h024, 32'd0);
-        cbus_write32(VIRTIO_BASE + 64'h020, VIRTIO_FEATURE_RING);
+        cbus_write32(VIRTIO_BASE + 64'h020, VIRTIO_FEATURE_SEL0);
         expect_read32(
             VIRTIO_BASE + 64'h020,
-            VIRTIO_FEATURE_RING,
-            "virtio_driver_features_ring"
+            VIRTIO_FEATURE_SEL0,
+            "virtio_driver_features_sel0"
         );
         cbus_write32(VIRTIO_BASE + 64'h024, 32'd1);
         cbus_write32(VIRTIO_BASE + 64'h020, VIRTIO_FEATURE_VERSION_1);

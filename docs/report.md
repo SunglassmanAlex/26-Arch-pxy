@@ -25,7 +25,7 @@
 - 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
 - 新增 `SUM/MXR` 支持：`MXR` 允许 load 读取 execute-only 页，`SUM` 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
 - 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
-- 新增仿真侧 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器、`ConfigGeneration` 和 virtio-blk config 字段，提供基础 feature negotiation，提供同步 512B sector 读写扩展，支持 `Status=0` reset、单 queue 的 descriptor/avail/used ring、indirect descriptor 和 event idx 中断抑制/触发子集，并支持 `+simple_blk_image=...` 从二进制镜像初始化 disk。
+- 新增仿真侧 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器、`ConfigGeneration` 和 virtio-blk config 字段，提供包含 `SIZE_MAX/SEG_MAX/BLK_SIZE` 的 feature negotiation，提供同步 512B sector 读写扩展，支持 `Status=0` reset、单 queue 的 descriptor/avail/used ring、indirect descriptor 和 event idx 中断抑制/触发子集，并支持 `+simple_blk_image=...` 从二进制镜像初始化 disk。
 - 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1。
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear 和 LSR overrun，并将 UART interrupt 接到 PLIC source 10。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
@@ -211,7 +211,7 @@ RISC-V Sv39 的叶子 PTE 中，`A` 表示 accessed，`D` 表示 dirty。为了�
 
 标准 virtio-mmio queue 子集：
 
-- `DeviceFeaturesSel/DriverFeaturesSel` 按 32-bit bank 选择 feature，当前广告 `VIRTQ_DESC_F_INDIRECT`、`VIRTIO_RING_F_EVENT_IDX` 和 `VIRTIO_F_VERSION_1`；写 `Status.FEATURES_OK` 时会检查 driver 是否写入 unsupported feature，若有则清除 `FEATURES_OK`。
+- `DeviceFeaturesSel/DriverFeaturesSel` 按 32-bit bank 选择 feature，当前广告 `VIRTIO_BLK_F_SIZE_MAX`、`VIRTIO_BLK_F_SEG_MAX`、`VIRTIO_BLK_F_BLK_SIZE`、`VIRTQ_DESC_F_INDIRECT`、`VIRTIO_RING_F_EVENT_IDX` 和 `VIRTIO_F_VERSION_1`；写 `Status.FEATURES_OK` 时会检查 driver 是否写入 unsupported feature，若有则清除 `FEATURES_OK`。
 - 支持 queue 0，`QueueNumMax=8`，实现 `QueueSel/QueueNum/QueueReady/QueueDescLow/High/QueueDriverLow/High/QueueDeviceLow/High/QueueNotify`。
 - `QueueNotify=0` 时读取 avail ring 的下一个 head descriptor，按 virtio block 的三段 descriptor 链处理：request header、512B data buffer、1B status。
 - 当 head descriptor 带 `VIRTQ_DESC_F_INDIRECT` 时，将其 `addr/len` 解释为 indirect descriptor table，并从 table 内继续解析三段链。
@@ -372,7 +372,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/difftest_stubs.sv`
   - 为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
 - `vsrc/util/SimMemoryWithVirtio.sv`
-  - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO；支持 virtio-blk config 读字段、`ConfigGeneration`、基础 feature negotiation、`Status=0` reset、单 queue 的 descriptor/avail/used ring、indirect descriptor 和 event idx block read/write 子集，并支持 `+simple_blk_image=...` 从二进制镜像初始化 simple-block disk。
+  - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO；支持 virtio-blk config 读字段、`ConfigGeneration`、包含 `SIZE_MAX/SEG_MAX/BLK_SIZE` 的 feature negotiation、`Status=0` reset、单 queue 的 descriptor/avail/used ring、indirect descriptor 和 event idx block read/write 子集，并支持 `+simple_blk_image=...` 从二进制镜像初始化 simple-block disk。
   - 新增 PLIC MMIO 模型，拦截 `0x0c000000` 到 `0x0fffffff`，支持 source priority、pending、M/S enable、threshold、claim/complete。
   - 新增 `0x10000000` 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、FCR trigger/clear、MCR、SCR、LSR overrun、THR TX 输出、THRE interrupt、RX FIFO timeout、16B RBR RX FIFO 和 RX/THRE/RLS interrupt 到 PLIC source 10。
 - `vsrc/SimTop.sv`
@@ -382,7 +382,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/uart_mmio_tb.sv`
   - 新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
 - `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
-  - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、`ConfigGeneration`、未知命令/越界 sector 错误状态、feature negotiation、virtqueue read/write、indirect descriptor read、event idx 抑制/触发中断、`Status=0` reset、512B sector write/read。
+  - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、`ConfigGeneration`、未知命令/越界 sector 错误状态、block/ring feature negotiation、virtqueue read/write、indirect descriptor read、event idx 抑制/触发中断、`Status=0` reset、512B sector write/read。
 - `Makefile`
   - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-plic`、`test-labplus-uart` 和 `test-labplus-virtio`。
 - `ready-to-run/lab+/`
@@ -732,10 +732,10 @@ simple_block_image_read_status [OK]
 simple_block_image_read_data [OK]
 simple_block_unknown_cmd_status [OK]
 simple_block_oob_status [OK]
-virtio_features_ring [OK]
+virtio_features_sel0 [OK]
 virtio_features_version1 [OK]
 virtio_features_unsupported_rejected [OK]
-virtio_driver_features_ring [OK]
+virtio_driver_features_sel0 [OK]
 virtio_driver_features_version1 [OK]
 virtio_queue_num_max [OK]
 virtio_status_driver_ok [OK]
@@ -782,13 +782,13 @@ simple_block_read_status [OK]
 simple virtio block MMIO test passed.
 ```
 
-测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 `+simple_blk_image=build/simple-virtio/simple-blk.img` 传给模型；reset 后读取 virtio magic/version/device/vendor、simple-block 容量寄存器、`ConfigGeneration` 和标准 virtio-blk config 字段；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 `cmd=99` 检查 `status=1`，再访问越界 `sector=16` 检查 `status=2`；然后读取 feature bank 0/1，验证 unsupported feature 会使 `FEATURES_OK` 被清除，再协商 indirect descriptor、event idx 和 version 1；之后配置 queue 0，在 RAM 中构造三段 descriptor 链，覆盖 virtqueue read 的 status、used ring、interrupt status/ack 和数据内容；再用 virtqueue write 写回 sector 4，并用 simple read 回读确认 disk 被更新；随后构造带 `VIRTQ_DESC_F_INDIRECT` 的 head descriptor，验证 indirect table 内三段链也能完成读请求；再设置 used_event 分别覆盖一次中断被抑制和一次中断被触发的 event idx 路径；随后向 `Status` 写 0，确认 status、interrupt status、feature selector、driver features、queue 配置、config generation 和 simple-block status 符合 reset 后状态；最后保留原 simple sector write/read 路径，确认向后兼容。
+测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 `+simple_blk_image=build/simple-virtio/simple-blk.img` 传给模型；reset 后读取 virtio magic/version/device/vendor、simple-block 容量寄存器、`ConfigGeneration` 和标准 virtio-blk config 字段；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 `cmd=99` 检查 `status=1`，再访问越界 `sector=16` 检查 `status=2`；然后读取 feature bank 0/1，验证 unsupported feature 会使 `FEATURES_OK` 被清除，再协商 `SIZE_MAX/SEG_MAX/BLK_SIZE`、indirect descriptor、event idx 和 version 1；之后配置 queue 0，在 RAM 中构造三段 descriptor 链，覆盖 virtqueue read 的 status、used ring、interrupt status/ack 和数据内容；再用 virtqueue write 写回 sector 4，并用 simple read 回读确认 disk 被更新；随后构造带 `VIRTQ_DESC_F_INDIRECT` 的 head descriptor，验证 indirect table 内三段链也能完成读请求；再设置 used_event 分别覆盖一次中断被抑制和一次中断被触发的 event idx 路径；随后向 `Status` 写 0，确认 status、interrupt status、feature selector、driver features、queue 配置、config generation 和 simple-block status 符合 reset 后状态；最后保留原 simple sector write/read 路径，确认向后兼容。
 
 ## 8. 后续可做项
 
 本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/indirect descriptor/event idx/reset 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，并补了独立 page fault、S interrupt、PLIC、UART 和 simple-block/virtqueue 定向测试。后续如果继续推进 xv6，需要补充：
 
-- 更完整的 virtio block feature 组合、多 queue、packed queue 和动态配置变更通知。
+- 更高级的 virtio block feature 组合（flush/discard/write-zeroes 等）、多 queue、packed queue 和动态配置变更通知。
 - 更完整的 16550 parity/framing/break 等线状态错误。
 - 将更多真实设备事件和更细粒度的 virtio 中断状态接入 PLIC source。
 - 更完整的 I-cache/分支预测或多级流水线，用于进一步提升 `test-labplus-2` 性能。
