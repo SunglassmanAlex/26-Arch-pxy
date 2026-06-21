@@ -37,7 +37,9 @@ module SimMemoryWithVirtio
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
     localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
     localparam u16 VIRTQ_DESC_F_INDIRECT = 16'h0004;
-    localparam u32 VIRTIO_FEATURES_SEL0 = 32'h1000_0000;
+    localparam u32 VIRTIO_FEATURE_RING_INDIRECT = 32'h1000_0000;
+    localparam u32 VIRTIO_FEATURE_RING_EVENT_IDX = 32'h2000_0000;
+    localparam u32 VIRTIO_FEATURES_SEL0 = VIRTIO_FEATURE_RING_INDIRECT | VIRTIO_FEATURE_RING_EVENT_IDX;
     localparam u32 VIRTIO_FEATURES_SEL1 = 32'h0000_0001;
     localparam u32 VIRTIO_MMIO_INT_VRING = 32'h0000_0001;
     localparam u32 VIRTIO_STATUS_FEATURES_OK = 32'h0000_0008;
@@ -659,18 +661,24 @@ module SimMemoryWithVirtio
 
     task automatic complete_virtqueue_request(input u16 head, input u32 used_len);
         u16 used_idx;
+        u16 next_used_idx;
         u16 used_slot;
         addr_t used_elem_addr;
+        logic should_interrupt;
         begin
             used_idx = ram_read_u16_addr(virt_queue_device + 64'd2);
+            next_used_idx = used_idx + 16'd1;
+            should_interrupt = virtqueue_should_interrupt(used_idx, next_used_idx);
             used_slot = u16'(used_idx % u16'(virt_queue_num[15:0]));
             used_elem_addr = virt_queue_device + 64'd4 + 64'(used_slot) * 64'd8;
             ram_write_u32_addr(used_elem_addr, {16'd0, head});
             ram_write_u32_addr(used_elem_addr + 64'd4, used_len);
-            ram_write_u16_addr(virt_queue_device + 64'd2, used_idx + 16'd1);
+            ram_write_u16_addr(virt_queue_device + 64'd2, next_used_idx);
             virt_last_avail_idx <= virt_last_avail_idx + 16'd1;
-            virt_interrupt_status <= virt_interrupt_status | VIRTIO_MMIO_INT_VRING;
-            plic_pending[PLIC_VIRTIO_SOURCE] <= 1'b1;
+            if (should_interrupt) begin
+                virt_interrupt_status <= virt_interrupt_status | VIRTIO_MMIO_INT_VRING;
+                plic_pending[PLIC_VIRTIO_SOURCE] <= 1'b1;
+            end
         end
     endtask
 
@@ -826,6 +834,30 @@ module SimMemoryWithVirtio
         virtio_driver_features_supported =
             ((virt_driver_features_sel0 & ~VIRTIO_FEATURES_SEL0) == 32'd0) &&
             ((virt_driver_features_sel1 & ~VIRTIO_FEATURES_SEL1) == 32'd0);
+    endfunction
+
+    function automatic logic virtio_event_idx_enabled();
+        virtio_event_idx_enabled =
+            (virt_driver_features_sel0 & VIRTIO_FEATURE_RING_EVENT_IDX) != 32'd0;
+    endfunction
+
+    function automatic logic vring_need_event(input u16 event_idx, input u16 new_idx, input u16 old_idx);
+        vring_need_event = u16'(new_idx - event_idx - 16'd1) < u16'(new_idx - old_idx);
+    endfunction
+
+    function automatic logic virtqueue_should_interrupt(input u16 old_used_idx, input u16 new_used_idx);
+        u16 avail_flags;
+        u16 used_event;
+        begin
+            if (virtio_event_idx_enabled()) begin
+                used_event = ram_read_u16_addr(virt_queue_driver + 64'd4 + 64'(virt_queue_num[15:0]) * 64'd2);
+                virtqueue_should_interrupt = vring_need_event(used_event, new_used_idx, old_used_idx);
+            end
+            else begin
+                avail_flags = ram_read_u16_addr(virt_queue_driver);
+                virtqueue_should_interrupt = !avail_flags[0];
+            end
+        end
     endfunction
 
     function automatic u32 virtio_reg32_read(input addr_t addr);
