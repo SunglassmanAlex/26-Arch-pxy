@@ -19,6 +19,11 @@ module simple_virtio_block_tb
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
     localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
     localparam u16 VIRTQ_DESC_F_INDIRECT = 16'h0004;
+    localparam u32 VIRTIO_FEATURE_INDIRECT = 32'h1000_0000;
+    localparam u32 VIRTIO_FEATURE_VERSION_1 = 32'h0000_0001;
+    localparam u32 VIRTIO_STATUS_ACK_DRIVER = 32'h0000_0003;
+    localparam u32 VIRTIO_STATUS_FEATURES_OK = 32'h0000_0008;
+    localparam u32 VIRTIO_STATUS_DRIVER_OK = 32'h0000_0004;
     localparam string SIMPLE_BLK_IMAGE_PATH = "build/simple-virtio/simple-blk.img";
 
     logic clk, reset;
@@ -279,6 +284,33 @@ module simple_virtio_block_tb
         ram_write_u16(VQ_USED_ADDR, 16'd0);
         ram_write_u16(VQ_USED_ADDR + 64'd2, 16'd0);
         cbus_write32(VIRTIO_BASE + 64'h070, 32'd0);
+        cbus_write32(VIRTIO_BASE + 64'h014, 32'd0);
+        expect_read32(VIRTIO_BASE + 64'h010, VIRTIO_FEATURE_INDIRECT, "virtio_features_indirect");
+        cbus_write32(VIRTIO_BASE + 64'h014, 32'd1);
+        expect_read32(VIRTIO_BASE + 64'h010, VIRTIO_FEATURE_VERSION_1, "virtio_features_version1");
+        cbus_write32(VIRTIO_BASE + 64'h024, 32'd0);
+        cbus_write32(VIRTIO_BASE + 64'h020, 32'h0000_0001);
+        cbus_write32(VIRTIO_BASE + 64'h070, VIRTIO_STATUS_ACK_DRIVER | VIRTIO_STATUS_FEATURES_OK);
+        expect_read32(
+            VIRTIO_BASE + 64'h070,
+            VIRTIO_STATUS_ACK_DRIVER,
+            "virtio_features_unsupported_rejected"
+        );
+        cbus_write32(VIRTIO_BASE + 64'h070, 32'd0);
+        cbus_write32(VIRTIO_BASE + 64'h024, 32'd0);
+        cbus_write32(VIRTIO_BASE + 64'h020, VIRTIO_FEATURE_INDIRECT);
+        expect_read32(
+            VIRTIO_BASE + 64'h020,
+            VIRTIO_FEATURE_INDIRECT,
+            "virtio_driver_features_indirect"
+        );
+        cbus_write32(VIRTIO_BASE + 64'h024, 32'd1);
+        cbus_write32(VIRTIO_BASE + 64'h020, VIRTIO_FEATURE_VERSION_1);
+        expect_read32(
+            VIRTIO_BASE + 64'h020,
+            VIRTIO_FEATURE_VERSION_1,
+            "virtio_driver_features_version1"
+        );
         cbus_write32(VIRTIO_BASE + 64'h030, 32'd0);
         expect_read32(VIRTIO_BASE + 64'h034, 32'd8, "virtio_queue_num_max");
         cbus_write32(VIRTIO_BASE + 64'h038, 32'd8);
@@ -289,8 +321,15 @@ module simple_virtio_block_tb
         cbus_write32(VIRTIO_BASE + 64'h0a0, VQ_USED_ADDR[31:0]);
         cbus_write32(VIRTIO_BASE + 64'h0a4, VQ_USED_ADDR[63:32]);
         cbus_write32(VIRTIO_BASE + 64'h044, 32'd1);
-        cbus_write32(VIRTIO_BASE + 64'h070, 32'h0000_000f);
-        expect_read32(VIRTIO_BASE + 64'h070, 32'h0000_000f, "virtio_status_driver_ok");
+        cbus_write32(
+            VIRTIO_BASE + 64'h070,
+            VIRTIO_STATUS_ACK_DRIVER | VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK
+        );
+        expect_read32(
+            VIRTIO_BASE + 64'h070,
+            VIRTIO_STATUS_ACK_DRIVER | VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK,
+            "virtio_status_driver_ok"
+        );
     endtask
 
 

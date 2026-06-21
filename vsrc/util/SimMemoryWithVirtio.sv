@@ -37,7 +37,10 @@ module SimMemoryWithVirtio
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
     localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
     localparam u16 VIRTQ_DESC_F_INDIRECT = 16'h0004;
+    localparam u32 VIRTIO_FEATURES_SEL0 = 32'h1000_0000;
+    localparam u32 VIRTIO_FEATURES_SEL1 = 32'h0000_0001;
     localparam u32 VIRTIO_MMIO_INT_VRING = 32'h0000_0001;
+    localparam u32 VIRTIO_STATUS_FEATURES_OK = 32'h0000_0008;
     localparam u32 VIRTIO_BLK_T_IN = 32'd0;
     localparam u32 VIRTIO_BLK_T_OUT = 32'd1;
     localparam u8 VIRTIO_BLK_S_OK = 8'd0;
@@ -60,7 +63,8 @@ module SimMemoryWithVirtio
     logic ram_exint, plic_irq_m, plic_irq_s;
     word_t blk_sector, blk_mem_addr, blk_cmd, blk_status;
     u32 virt_device_features_sel, virt_driver_features_sel;
-    u32 virt_driver_features, virt_queue_sel, virt_queue_num, virt_queue_ready, virt_status;
+    u32 virt_driver_features_sel0, virt_driver_features_sel1;
+    u32 virt_queue_sel, virt_queue_num, virt_queue_ready, virt_status;
     u32 virt_interrupt_status;
     addr_t virt_queue_desc, virt_queue_driver, virt_queue_device;
     u16 virt_last_avail_idx;
@@ -802,6 +806,28 @@ module SimMemoryWithVirtio
         end
     endtask
 
+    function automatic u32 virtio_device_features_selected();
+        unique case (virt_device_features_sel)
+            32'd0: virtio_device_features_selected = VIRTIO_FEATURES_SEL0;
+            32'd1: virtio_device_features_selected = VIRTIO_FEATURES_SEL1;
+            default: virtio_device_features_selected = 32'd0;
+        endcase
+    endfunction
+
+    function automatic u32 virtio_driver_features_selected();
+        unique case (virt_driver_features_sel)
+            32'd0: virtio_driver_features_selected = virt_driver_features_sel0;
+            32'd1: virtio_driver_features_selected = virt_driver_features_sel1;
+            default: virtio_driver_features_selected = 32'd0;
+        endcase
+    endfunction
+
+    function automatic logic virtio_driver_features_supported();
+        virtio_driver_features_supported =
+            ((virt_driver_features_sel0 & ~VIRTIO_FEATURES_SEL0) == 32'd0) &&
+            ((virt_driver_features_sel1 & ~VIRTIO_FEATURES_SEL1) == 32'd0);
+    endfunction
+
     function automatic u32 virtio_reg32_read(input addr_t addr);
         addr_t offset;
         begin
@@ -811,9 +837,9 @@ module SimMemoryWithVirtio
                 64'h004: virtio_reg32_read = 32'd2;
                 64'h008: virtio_reg32_read = 32'd2;
                 64'h00c: virtio_reg32_read = 32'h554d_4551;
-                64'h010: virtio_reg32_read = 32'd0;
+                64'h010: virtio_reg32_read = virtio_device_features_selected();
                 64'h014: virtio_reg32_read = virt_device_features_sel;
-                64'h020: virtio_reg32_read = virt_driver_features;
+                64'h020: virtio_reg32_read = virtio_driver_features_selected();
                 64'h024: virtio_reg32_read = virt_driver_features_sel;
                 64'h030: virtio_reg32_read = virt_queue_sel;
                 64'h034: virtio_reg32_read = (virt_queue_sel == 32'd0) ? u32'(VIRTQ_NUM_MAX) : 32'd0;
@@ -885,7 +911,13 @@ module SimMemoryWithVirtio
             offset = addr - VIRTIO_BASE;
             unique case (offset)
                 64'h014: virt_device_features_sel <= data;
-                64'h020: virt_driver_features <= data;
+                64'h020: begin
+                    unique case (virt_driver_features_sel)
+                        32'd0: virt_driver_features_sel0 <= data;
+                        32'd1: virt_driver_features_sel1 <= data;
+                        default: begin end
+                    endcase
+                end
                 64'h024: virt_driver_features_sel <= data;
                 64'h030: virt_queue_sel <= data;
                 64'h038: virt_queue_num <= data;
@@ -893,8 +925,14 @@ module SimMemoryWithVirtio
                 64'h050: run_virtqueue_command(data);
                 64'h064: virt_interrupt_status <= virt_interrupt_status & ~data;
                 64'h070: begin
-                    virt_status <= data;
+                    virt_status <= (((data & VIRTIO_STATUS_FEATURES_OK) != 32'd0) &&
+                        !virtio_driver_features_supported()) ?
+                        (data & ~VIRTIO_STATUS_FEATURES_OK) : data;
                     if (data == 32'd0) begin
+                        virt_driver_features_sel0 <= 32'd0;
+                        virt_driver_features_sel1 <= 32'd0;
+                        virt_driver_features_sel <= 32'd0;
+                        virt_device_features_sel <= 32'd0;
                         virt_queue_sel <= 32'd0;
                         virt_queue_num <= 32'd0;
                         virt_queue_ready <= 32'd0;
@@ -977,7 +1015,8 @@ module SimMemoryWithVirtio
             blk_status <= 64'd0;
             virt_device_features_sel <= 32'd0;
             virt_driver_features_sel <= 32'd0;
-            virt_driver_features <= 32'd0;
+            virt_driver_features_sel0 <= 32'd0;
+            virt_driver_features_sel1 <= 32'd0;
             virt_queue_sel <= 32'd0;
             virt_queue_num <= 32'd0;
             virt_queue_ready <= 32'd0;
