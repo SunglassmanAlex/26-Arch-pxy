@@ -368,6 +368,11 @@ module simple_virtio_block_tb
         expect_read(VIRTIO_BASE + 64'h008, DEVICE_VENDOR, "virtio_device_vendor");
         expect_read(VIRTIO_BASE + 64'h120, 64'd16, "simple_block_capacity");
         expect_read(VIRTIO_BASE + 64'h128, 64'd512, "simple_block_sector_size");
+        expect_read32(VIRTIO_BASE + 64'h100, 32'd16, "virtio_config_capacity_low");
+        expect_read32(VIRTIO_BASE + 64'h104, 32'd0, "virtio_config_capacity_high");
+        expect_read32(VIRTIO_BASE + 64'h108, 32'd512, "virtio_config_size_max");
+        expect_read32(VIRTIO_BASE + 64'h10c, 32'd1, "virtio_config_seg_max");
+        expect_read32(VIRTIO_BASE + 64'h114, 32'd512, "virtio_config_blk_size");
 
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(DMA_ADDR + 64'(word_idx * 8), 64'd0);

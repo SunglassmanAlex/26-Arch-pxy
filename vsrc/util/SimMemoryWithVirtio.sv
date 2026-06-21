@@ -856,6 +856,8 @@ module SimMemoryWithVirtio
                 64'h0fc: virtio_reg32_read = 32'd0;
                 64'h100: virtio_reg32_read = u32'(SIMPLE_BLK_SECTORS);
                 64'h104: virtio_reg32_read = 32'd0;
+                64'h108: virtio_reg32_read = 32'd512;
+                64'h10c: virtio_reg32_read = 32'd1;
                 64'h114: virtio_reg32_read = 32'd512;
                 64'h118: virtio_reg32_read = u32'(blk_status);
                 64'h120: virtio_reg32_read = u32'(SIMPLE_BLK_SECTORS);
