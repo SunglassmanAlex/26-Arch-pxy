@@ -20,6 +20,7 @@
 - 新增 PMP/privfull 支持：支持 `pmpcfg0` 中 8 个 PMP entry 的 `OFF/TOR/NA4/NAPOT` 匹配，产生 instruction/load/store access fault，并通过 `lab+/4` privileged sys-test。
 - 新增 `EBREAK` 断点异常支持：SYSTEM/funct12=`0x001` 触发同步异常 cause 3。
 - 新增 `FENCE/FENCE.I` 合法 no-op 支持，提升编译器生成程序的兼容性。
+- 新增 `WFI` 合法 no-op 支持，覆盖 S 态内核空闲等待指令的仿真兼容。
 - 新增 xv6 主线部分进展：补充真实 S-mode、`SRET`、异常/中断委托和 S 态 trap CSR 写入路径。
 - 新增 S 态中断 pending 委托转换：当 `mideleg` 委托 SSIP/STIP/SEIP 时，将 `swint/trint/exint` 映射到对应 S pending 位。
 - 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
@@ -31,9 +32,10 @@
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
 - 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
-- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-plic`、`test-labplus-uart` 与 `test-labplus-virtio` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 WFI 定向测试，覆盖 S 态合法 no-op 后继续执行并进入 S 态 ecall trap。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-plic`、`test-labplus-uart` 与 `test-labplus-virtio` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
-本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、SFENCE.VMA 定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试和 simple virtio block/virtqueue MMIO 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、SFENCE.VMA 定向测试、WFI 定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试和 simple virtio block/virtqueue MMIO 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 ## 3. Atomic Extension 设计
 
@@ -338,6 +340,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   - 新增 S-mode、`SRET`、`medeleg/mideleg` 委托、S 态 trap CSR 写入。
   - 新增委托后的 `SSIP/STIP/SEIP` pending 镜像，支持 `swint/trint/exint` 进入 S trap。
   - 新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水。
+  - 新增 `WFI` 解码，S/M 态作为合法 no-op，U 态仍按非法指令处理。
   - 输出当前 `mstatus` 给 MMU 使用。
 - `vsrc/SimTop.sv`
   - 仿真顶层改为实例化 `SimMemoryWithVirtio`，在原 RAM/CLINT 行为前增加 virtio/simple-block MMIO 拦截。
@@ -372,6 +375,8 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   - 验证 `trint` 在 `mideleg.STIP=1`、`mie.STIE=1`、`mstatus.SIE=1` 后进入 S trap，`scause` 为 interrupt cause 5。
 - `vsrc/test/sfence_vma_tb.sv`
   - 新增独立 core 级 Verilator testbench，验证 M 态 `SFENCE.VMA` 合法并触发 `if_flush`，以及 U 态 `SFENCE.VMA` 触发 illegal instruction trap。
+- `vsrc/test/wfi_tb.sv`
+  - 新增独立 core 级 Verilator testbench，验证 S 态 `WFI` 不触发 illegal trap，后续 `ecall` 能以 S-mode ecall cause 9 进入 M trap。
 - `vsrc/test/difftest_stubs.sv`
   - 为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
 - `vsrc/util/SimMemoryWithVirtio.sv`
@@ -387,7 +392,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
   - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、`ConfigGeneration`、未知命令/越界 sector 错误状态、block/ring feature negotiation、virtqueue read/write、indirect descriptor read、一次 `QueueNotify` 多 pending entry、`InterruptACK` 清 PLIC pending、event idx 抑制/触发中断、xv6 风格普通 avail flags 中断控制、`Status=0` reset、512B sector write/read。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-plic`、`test-labplus-uart` 和 `test-labplus-virtio`。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-plic`、`test-labplus-uart` 和 `test-labplus-virtio`。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -570,7 +575,24 @@ SFENCE.VMA directed test passed.
 
 该测试直接实例化 `core`，先在 M 态设置 `mtvec=0x100` 并执行 `SFENCE.VMA`，检查该指令作为合法指令进入保守 `if_flush` 路径；随后设置 `mepc=0x40`、清 `mstatus.MPP` 并执行 `mret` 降到 U 态，在 U 态再次执行 `SFENCE.VMA`，确认进入 M 态 illegal instruction trap，`mcause=2` 且 `mepc=0x40`。
 
-### 7.11 PLIC MMIO 定向测试
+### 7.11 WFI 定向测试
+
+运行：
+
+```bash
+make test-labplus-wfi
+```
+
+关键输出：
+
+```text
+wfi_smode_noop [OK]
+WFI directed test passed.
+```
+
+该测试直接实例化 `core`，M 态设置 `mtvec=0x100`、`mepc=0x40`、`mstatus.MPP=S` 后执行 `mret` 进入 S 态。S 态指令流执行 `WFI; addi; ecall`，最后确认 trap 回 M 态时 `mcause=9` 且 `mepc=0x48`，说明 `WFI` 没有被错误识别为 illegal，也没有阻塞后续指令提交。
+
+### 7.12 PLIC MMIO 定向测试
 
 运行：
 
@@ -603,7 +625,7 @@ PLIC MMIO directed tests passed.
 
 该测试直接实例化 `SimMemoryWithVirtio`，先配置 PLIC source 1 priority、M/S enable 和 threshold，再通过 simple virtio block 命令完成事件置位 pending，验证 M context 和 S context 的 claim/complete 行为。
 
-### 7.12 UART MMIO 定向测试
+### 7.13 UART MMIO 定向测试
 
 运行：
 
@@ -726,7 +748,7 @@ UART MMIO directed tests passed.
 
 该测试直接实例化 `SimMemoryWithVirtio`，用 8-bit CBus 访问模拟 xv6 的 UART 初始化流程：先设置 `LCR.DLAB` 写 DLL/DLM，再恢复 8N1、写 IER/MCR/SCR，写 THR 并检查 `uart_out_valid/ch` 输出字符 `A`。随后配置 PLIC source 10，注入 RX 字符 `B`，验证 `LSR.RX_READY`、`IIR=0x04`、PLIC pending/exint、读 RBR 清 RX-ready，以及 PLIC claim/complete。最后覆盖 16B FIFO 顺序读出、FCR trigger=4 时前三个字符不触发中断/第四个字符触发、FCR bit1 清 RX FIFO、满 FIFO 反压输入、强制 overrun 后 IIR line-status 优先级、LSR sticky overrun 读后清除、启用 THRE 后 IIR `0x02` 和 THR 写入后的再次 THRE interrupt，以及低于 trigger 的 RX FIFO timeout `IIR=0x0c`。
 
-### 7.13 Simple virtio block MMIO 定向测试
+### 7.14 Simple virtio block MMIO 定向测试
 
 运行：
 
@@ -835,7 +857,7 @@ simple virtio block MMIO test passed.
 
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/indirect descriptor/multi-pending notify/event idx/reset 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，并补了独立 page fault、S interrupt、SFENCE.VMA、PLIC、UART 和 simple-block/virtqueue 定向测试。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/indirect descriptor/multi-pending notify/event idx/reset 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，并补了独立 page fault、S interrupt、SFENCE.VMA、WFI、PLIC、UART 和 simple-block/virtqueue 定向测试。后续如果继续推进 xv6，需要补充：
 
 - 更高级的 virtio block feature 组合（flush/discard/write-zeroes 等）、多 queue、packed queue 和动态配置变更通知。
 - 更完整的 16550 parity/framing/break 等线状态错误。
@@ -846,7 +868,7 @@ simple virtio block MMIO test passed.
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/indirect descriptor/multi-pending notify/event idx/reset 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、PLIC、UART 和 simple-block/virtqueue 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、SFENCE.VMA directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/indirect descriptor/multi-pending notify/event idx/reset 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、PLIC、UART 和 simple-block/virtqueue 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 

@@ -16,6 +16,7 @@ no_arguments:
 	@echo "  - test-labplus-pagefault: Run Lab+ directed MMU page-fault test"
 	@echo "  - test-labplus-sinterrupt: Run Lab+ directed S-mode interrupt test"
 	@echo "  - test-labplus-sfence: Run Lab+ directed SFENCE.VMA test"
+	@echo "  - test-labplus-wfi: Run Lab+ directed WFI test"
 	@echo "  - test-labplus-plic: Run Lab+ directed PLIC MMIO test"
 	@echo "  - test-labplus-uart: Run Lab+ directed UART MMIO test"
 	@echo "  - test-labplus-virtio: Run Lab+ directed simple virtio block test"
@@ -107,6 +108,14 @@ test-labplus-sfence:
 	  -Mdir build/sfence-vma -o sfence_vma_tb \
 	  vsrc/test/difftest_stubs.sv vsrc/test/sfence_vma_tb.sv
 	./build/sfence-vma/sfence_vma_tb
+
+test-labplus-wfi:
+	rm -rf build/wfi
+	verilator --binary --timing --top-module wfi_tb \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/wfi -o wfi_tb \
+	  vsrc/test/difftest_stubs.sv vsrc/test/wfi_tb.sv
+	./build/wfi/wfi_tb
 
 test-labplus-plic:
 	rm -rf build/plic-mmio

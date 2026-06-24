@@ -472,7 +472,7 @@ module core import common::*;(
 	logic id_wen, id_use_imm, id_is_word, id_valid;
 	logic id_is_md, id_is_lui, id_is_auipc, id_is_load, id_is_store, id_is_amo;
 	logic id_is_branch, id_is_jal, id_is_jalr, id_is_csr, id_is_fence;
-	logic id_is_ecall, id_is_ebreak, id_is_mret, id_is_sret, id_is_sfence_vma;
+	logic id_is_ecall, id_is_ebreak, id_is_mret, id_is_sret, id_is_wfi, id_is_sfence_vma;
 	logic [3:0] id_alu_op;
 	logic [2:0] id_branch_op;
 	logic [3:0] id_md_op;
@@ -572,6 +572,7 @@ module core import common::*;(
 		id_is_ebreak = 1'b0;
 		id_is_mret = 1'b0;
 		id_is_sret = 1'b0;
+		id_is_wfi = 1'b0;
 		id_alu_op = ALU_ADD;
 		id_branch_op = BR_EQ;
 		id_md_op = MD_NONE;
@@ -779,6 +780,7 @@ module core import common::*;(
 							if (if_id_instr[31:20] == 12'h000) id_is_ecall = 1'b1;
 							else if (if_id_instr[31:20] == 12'h001) id_is_ebreak = 1'b1;
 							else if (if_id_instr[31:20] == 12'h102) id_is_sret = 1'b1;
+							else if (if_id_instr[31:20] == 12'h105) id_is_wfi = 1'b1;
 							else if (if_id_instr[31:20] == 12'h302) id_is_mret = 1'b1;
 						end
 					default: begin
@@ -1017,7 +1019,8 @@ module core import common::*;(
 			(id_wen && !id_is_csr) || id_is_store || id_is_branch ||
 			id_is_fence || id_is_ecall || id_is_ebreak ||
 			(id_is_sret && current_priv != PRIV_U) || (id_is_mret && current_priv == PRIV_M) ||
-			id_is_sfence_vma || id_csr_legal || (if_id_instr == 32'h0005_006b);
+			(id_is_wfi && current_priv != PRIV_U) || id_is_sfence_vma ||
+			id_csr_legal || (if_id_instr == 32'h0005_006b);
 
 	always_comb begin
 		unique case (id_branch_op)
