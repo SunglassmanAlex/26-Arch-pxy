@@ -21,6 +21,7 @@ module simple_virtio_block_tb
     localparam int VIRTIO_IRQ = 1;
     localparam word_t MAGIC_VERSION = {32'd2, 32'h7472_6976};
     localparam word_t DEVICE_VENDOR = {32'h554d_4551, 32'd2};
+    localparam u16 VIRTQ_AVAIL_F_NO_INTERRUPT = 16'h0001;
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
     localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
     localparam u16 VIRTQ_DESC_F_INDIRECT = 16'h0004;
@@ -350,6 +351,52 @@ module simple_virtio_block_tb
         );
     endtask
 
+    task automatic setup_virtqueue_xv6_features();
+        ram_write_u16(VQ_AVAIL_ADDR, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd0);
+        ram_write_u16(VQ_USED_ADDR, 16'd0);
+        ram_write_u16(VQ_USED_ADDR + 64'd2, 16'd0);
+        cbus_write32(VIRTIO_BASE + 64'h070, 32'd0);
+        cbus_write32(VIRTIO_BASE + 64'h024, 32'd0);
+        cbus_write32(VIRTIO_BASE + 64'h020, VIRTIO_FEATURE_BLK);
+        expect_read32(
+            VIRTIO_BASE + 64'h020,
+            VIRTIO_FEATURE_BLK,
+            "virtio_xv6_driver_features_sel0"
+        );
+        cbus_write32(VIRTIO_BASE + 64'h024, 32'd1);
+        cbus_write32(VIRTIO_BASE + 64'h020, VIRTIO_FEATURE_VERSION_1);
+        expect_read32(
+            VIRTIO_BASE + 64'h020,
+            VIRTIO_FEATURE_VERSION_1,
+            "virtio_xv6_driver_features_version1"
+        );
+        cbus_write32(VIRTIO_BASE + 64'h070, VIRTIO_STATUS_ACK_DRIVER | VIRTIO_STATUS_FEATURES_OK);
+        expect_read32(
+            VIRTIO_BASE + 64'h070,
+            VIRTIO_STATUS_ACK_DRIVER | VIRTIO_STATUS_FEATURES_OK,
+            "virtio_xv6_features_ok"
+        );
+        cbus_write32(VIRTIO_BASE + 64'h030, 32'd0);
+        cbus_write32(VIRTIO_BASE + 64'h038, 32'd8);
+        cbus_write32(VIRTIO_BASE + 64'h080, VQ_DESC_ADDR[31:0]);
+        cbus_write32(VIRTIO_BASE + 64'h084, VQ_DESC_ADDR[63:32]);
+        cbus_write32(VIRTIO_BASE + 64'h090, VQ_AVAIL_ADDR[31:0]);
+        cbus_write32(VIRTIO_BASE + 64'h094, VQ_AVAIL_ADDR[63:32]);
+        cbus_write32(VIRTIO_BASE + 64'h0a0, VQ_USED_ADDR[31:0]);
+        cbus_write32(VIRTIO_BASE + 64'h0a4, VQ_USED_ADDR[63:32]);
+        cbus_write32(VIRTIO_BASE + 64'h044, 32'd1);
+        cbus_write32(
+            VIRTIO_BASE + 64'h070,
+            VIRTIO_STATUS_ACK_DRIVER | VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK
+        );
+        expect_read32(
+            VIRTIO_BASE + 64'h070,
+            VIRTIO_STATUS_ACK_DRIVER | VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK,
+            "virtio_xv6_status_driver_ok"
+        );
+    endtask
+
 
     task automatic write_image_file(input string path);
         int image_fd;
@@ -618,6 +665,59 @@ module simple_virtio_block_tb
         expect_read32(VIRTIO_BASE + 64'h080, 32'd0, "virtio_reset_queue_desc_low");
         expect_read32(VIRTIO_BASE + 64'h0fc, 32'd0, "virtio_config_generation_after_reset");
         expect_read(VIRTIO_BASE + 64'h118, 64'd0, "virtio_reset_simple_block_status");
+
+        setup_virtqueue_xv6_features();
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            ram_write_word(VQ_BUF_ADDR + 64'(word_idx * 8), 64'd0);
+        end
+        write_blk_request(32'd0, 64'd12);
+        ram_write_byte(VQ_STATUS_ADDR, 8'hff);
+        write_desc(0, VQ_REQ_ADDR, 32'd16, VIRTQ_DESC_F_NEXT, 16'd1);
+        write_desc(1, VQ_BUF_ADDR, 32'd512, VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 16'd2);
+        write_desc(2, VQ_STATUS_ADDR, 32'd1, VIRTQ_DESC_F_WRITE, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR, VIRTQ_AVAIL_F_NO_INTERRUPT);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd4, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd1);
+        cbus_write32(VIRTIO_BASE + 64'h050, 32'd0);
+        expect_ram_byte(VQ_STATUS_ADDR, 8'd0, "virtio_xv6_no_interrupt_status");
+        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd1, "virtio_xv6_no_interrupt_used_idx");
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd0, "virtio_xv6_no_interrupt_status_reg");
+        expect_read32(PLIC_PENDING, 32'd0, "virtio_xv6_no_interrupt_plic_pending");
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            word_t data;
+            data = ram_read_word(VQ_BUF_ADDR + 64'(word_idx * 8));
+            if (data !== image_pattern(12 * 64 + word_idx)) begin
+                $fatal(1, "virtqueue xv6 no interrupt word %0d read %h expected %h",
+                    word_idx, data, image_pattern(12 * 64 + word_idx));
+            end
+        end
+        $display("virtio_xv6_no_interrupt_read_data [OK]");
+
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            ram_write_word(VQ_BUF_ADDR + 64'(word_idx * 8), 64'd0);
+        end
+        write_blk_request(32'd0, 64'd13);
+        ram_write_byte(VQ_STATUS_ADDR, 8'hff);
+        ram_write_u16(VQ_AVAIL_ADDR, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd6, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd2);
+        cbus_write32(VIRTIO_BASE + 64'h050, 32'd0);
+        expect_ram_byte(VQ_STATUS_ADDR, 8'd0, "virtio_xv6_interrupt_status");
+        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd2, "virtio_xv6_interrupt_used_idx");
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd1, "virtio_xv6_interrupt_status_reg");
+        expect_read32(PLIC_PENDING, 32'(1 << VIRTIO_IRQ), "virtio_xv6_interrupt_plic_pending");
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            word_t data;
+            data = ram_read_word(VQ_BUF_ADDR + 64'(word_idx * 8));
+            if (data !== image_pattern(13 * 64 + word_idx)) begin
+                $fatal(1, "virtqueue xv6 interrupt word %0d read %h expected %h",
+                    word_idx, data, image_pattern(13 * 64 + word_idx));
+            end
+        end
+        $display("virtio_xv6_interrupt_read_data [OK]");
+        cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd0, "virtio_xv6_interrupt_ack");
+        expect_read32(PLIC_PENDING, 32'd0, "virtio_xv6_interrupt_ack_plic_clear");
 
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(DMA_ADDR + 64'(word_idx * 8), pattern(word_idx));
