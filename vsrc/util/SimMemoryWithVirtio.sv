@@ -680,7 +680,6 @@ module SimMemoryWithVirtio
             ram_write_u32_addr(used_elem_addr, {16'd0, head});
             ram_write_u32_addr(used_elem_addr + 64'd4, used_len);
             ram_write_u16_addr(virt_queue_device + 64'd2, next_used_idx);
-            virt_last_avail_idx <= virt_last_avail_idx + 16'd1;
             if (should_interrupt) begin
                 virt_interrupt_status <= virt_interrupt_status | VIRTIO_MMIO_INT_VRING;
                 plic_pending[PLIC_VIRTIO_SOURCE] <= 1'b1;
@@ -688,10 +687,7 @@ module SimMemoryWithVirtio
         end
     endtask
 
-    task automatic run_virtqueue_command(input u32 queue_notify);
-        u16 avail_idx;
-        u16 avail_slot;
-        u16 head;
+    task automatic run_virtqueue_head(input u16 head, output logic completed);
         addr_t desc0_addr, desc1_addr, desc2_addr;
         u32 desc0_len, desc1_len, desc2_len;
         u16 desc0_flags, desc1_flags, desc2_flags;
@@ -707,19 +703,7 @@ module SimMemoryWithVirtio
         word_t write_word;
         logic status_desc_valid;
         begin
-            if ((queue_notify != 32'd0) || (virt_queue_sel != 32'd0) ||
-                (virt_queue_ready == 32'd0) || (virt_queue_num == 32'd0) ||
-                (virt_queue_num > u32'(VIRTQ_NUM_MAX))) begin
-                return;
-            end
-
-            avail_idx = ram_read_u16_addr(virt_queue_driver + 64'd2);
-            if (avail_idx == virt_last_avail_idx) begin
-                return;
-            end
-
-            avail_slot = u16'(virt_last_avail_idx % u16'(virt_queue_num[15:0]));
-            head = ram_read_u16_addr(virt_queue_driver + 64'd4 + 64'(avail_slot) * 64'd2);
+            completed = 1'b0;
             if (head >= u16'(virt_queue_num[15:0])) begin
                 return;
             end
@@ -817,6 +801,41 @@ module SimMemoryWithVirtio
             end
             blk_status <= {56'd0, status};
             complete_virtqueue_request(head, used_len);
+            completed = 1'b1;
+        end
+    endtask
+
+    task automatic run_virtqueue_command(input u32 queue_notify);
+        u16 avail_idx;
+        u16 next_avail_idx;
+        u16 avail_slot;
+        u16 head;
+        logic completed;
+        logic stop_processing;
+        begin
+            if ((queue_notify != 32'd0) || (virt_queue_sel != 32'd0) ||
+                (virt_queue_ready == 32'd0) || (virt_queue_num == 32'd0) ||
+                (virt_queue_num > u32'(VIRTQ_NUM_MAX))) begin
+                return;
+            end
+
+            avail_idx = ram_read_u16_addr(virt_queue_driver + 64'd2);
+            next_avail_idx = virt_last_avail_idx;
+            stop_processing = 1'b0;
+            for (int pending_idx = 0; pending_idx < VIRTQ_NUM_MAX; pending_idx += 1) begin
+                if (!stop_processing && (next_avail_idx != avail_idx)) begin
+                    avail_slot = u16'(next_avail_idx % u16'(virt_queue_num[15:0]));
+                    head = ram_read_u16_addr(virt_queue_driver + 64'd4 + 64'(avail_slot) * 64'd2);
+                    run_virtqueue_head(head, completed);
+                    if (completed) begin
+                        next_avail_idx = next_avail_idx + 16'd1;
+                    end
+                    else begin
+                        stop_processing = 1'b1;
+                    end
+                end
+            end
+            virt_last_avail_idx <= next_avail_idx;
         end
     endtask
 

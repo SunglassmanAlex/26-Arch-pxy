@@ -14,6 +14,9 @@ module simple_virtio_block_tb
     localparam addr_t VQ_BUF_ADDR = 64'h0000_0000_8000_2400;
     localparam addr_t VQ_STATUS_ADDR = 64'h0000_0000_8000_2600;
     localparam addr_t VQ_INDIRECT_ADDR = 64'h0000_0000_8000_2700;
+    localparam addr_t VQ_REQ2_ADDR = 64'h0000_0000_8000_2800;
+    localparam addr_t VQ_BUF2_ADDR = 64'h0000_0000_8000_2900;
+    localparam addr_t VQ_STATUS2_ADDR = 64'h0000_0000_8000_2b00;
     localparam word_t MAGIC_VERSION = {32'd2, 32'h7472_6976};
     localparam word_t DEVICE_VENDOR = {32'h554d_4551, 32'd2};
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
@@ -281,10 +284,14 @@ module simple_virtio_block_tb
         write_desc_at(VQ_DESC_ADDR, index, desc_addr, desc_len, desc_flags, desc_next);
     endtask
 
+    task automatic write_blk_request_at(input addr_t req_addr, input u32 req_type, input word_t sector);
+        ram_write_u32(req_addr, req_type);
+        ram_write_u32(req_addr + 64'd4, 32'd0);
+        ram_write_u64(req_addr + 64'd8, sector);
+    endtask
+
     task automatic write_blk_request(input u32 req_type, input word_t sector);
-        ram_write_u32(VQ_REQ_ADDR, req_type);
-        ram_write_u32(VQ_REQ_ADDR + 64'd4, 32'd0);
-        ram_write_u64(VQ_REQ_ADDR + 64'd8, sector);
+        write_blk_request_at(VQ_REQ_ADDR, req_type, sector);
     endtask
 
     task automatic setup_virtqueue();
@@ -508,18 +515,62 @@ module simple_virtio_block_tb
 
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(VQ_BUF_ADDR + 64'(word_idx * 8), 64'd0);
+            ram_write_word(VQ_BUF2_ADDR + 64'(word_idx * 8), 64'd0);
+        end
+        write_blk_request_at(VQ_REQ_ADDR, 32'd0, 64'd10);
+        write_blk_request_at(VQ_REQ2_ADDR, 32'd0, 64'd11);
+        ram_write_byte(VQ_STATUS_ADDR, 8'hff);
+        ram_write_byte(VQ_STATUS2_ADDR, 8'hff);
+        write_desc(0, VQ_REQ_ADDR, 32'd16, VIRTQ_DESC_F_NEXT, 16'd1);
+        write_desc(1, VQ_BUF_ADDR, 32'd512, VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 16'd2);
+        write_desc(2, VQ_STATUS_ADDR, 32'd1, VIRTQ_DESC_F_WRITE, 16'd0);
+        write_desc(3, VQ_REQ2_ADDR, 32'd16, VIRTQ_DESC_F_NEXT, 16'd4);
+        write_desc(4, VQ_BUF2_ADDR, 32'd512, VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 16'd5);
+        write_desc(5, VQ_STATUS2_ADDR, 32'd1, VIRTQ_DESC_F_WRITE, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd20, 16'd4);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd10, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd12, 16'd3);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd5);
+        cbus_write32(VIRTIO_BASE + 64'h050, 32'd0);
+        expect_ram_byte(VQ_STATUS_ADDR, 8'd0, "virtio_queue_multi_first_status");
+        expect_ram_byte(VQ_STATUS2_ADDR, 8'd0, "virtio_queue_multi_second_status");
+        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd5, "virtio_queue_multi_used_idx");
+        expect_ram_u32(VQ_USED_ADDR + 64'd28, 32'd0, "virtio_queue_multi_first_used_id");
+        expect_ram_u32(VQ_USED_ADDR + 64'd32, 32'd513, "virtio_queue_multi_first_used_len");
+        expect_ram_u32(VQ_USED_ADDR + 64'd36, 32'd3, "virtio_queue_multi_second_used_id");
+        expect_ram_u32(VQ_USED_ADDR + 64'd40, 32'd513, "virtio_queue_multi_second_used_len");
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd1, "virtio_queue_multi_interrupt_status");
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            word_t data;
+            data = ram_read_word(VQ_BUF_ADDR + 64'(word_idx * 8));
+            if (data !== image_pattern(10 * 64 + word_idx)) begin
+                $fatal(1, "virtqueue multi first word %0d read %h expected %h",
+                    word_idx, data, image_pattern(10 * 64 + word_idx));
+            end
+            data = ram_read_word(VQ_BUF2_ADDR + 64'(word_idx * 8));
+            if (data !== image_pattern(11 * 64 + word_idx)) begin
+                $fatal(1, "virtqueue multi second word %0d read %h expected %h",
+                    word_idx, data, image_pattern(11 * 64 + word_idx));
+            end
+        end
+        $display("virtio_queue_multi_first_read_data [OK]");
+        $display("virtio_queue_multi_second_read_data [OK]");
+        cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
+
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            ram_write_word(VQ_BUF_ADDR + 64'(word_idx * 8), 64'd0);
         end
         write_blk_request(32'd0, 64'd8);
         ram_write_byte(VQ_STATUS_ADDR, 8'hff);
         write_desc(4, VQ_REQ_ADDR, 32'd16, VIRTQ_DESC_F_NEXT, 16'd5);
         write_desc(5, VQ_BUF_ADDR, 32'd512, VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 16'd6);
         write_desc(6, VQ_STATUS_ADDR, 32'd1, VIRTQ_DESC_F_WRITE, 16'd0);
-        ram_write_u16(VQ_AVAIL_ADDR + 64'd20, 16'd4);
-        ram_write_u16(VQ_AVAIL_ADDR + 64'd10, 16'd4);
-        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd4);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd20, 16'd6);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd14, 16'd4);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd6);
         cbus_write32(VIRTIO_BASE + 64'h050, 32'd0);
         expect_ram_byte(VQ_STATUS_ADDR, 8'd0, "virtio_event_idx_suppressed_status");
-        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd4, "virtio_event_idx_suppressed_used_idx");
+        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd6, "virtio_event_idx_suppressed_used_idx");
         expect_read32(VIRTIO_BASE + 64'h060, 32'd0, "virtio_event_idx_suppresses_interrupt");
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             word_t data;
@@ -536,12 +587,12 @@ module simple_virtio_block_tb
         end
         write_blk_request(32'd0, 64'd9);
         ram_write_byte(VQ_STATUS_ADDR, 8'hff);
-        ram_write_u16(VQ_AVAIL_ADDR + 64'd20, 16'd4);
-        ram_write_u16(VQ_AVAIL_ADDR + 64'd12, 16'd4);
-        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd5);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd20, 16'd6);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd16, 16'd4);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd7);
         cbus_write32(VIRTIO_BASE + 64'h050, 32'd0);
         expect_ram_byte(VQ_STATUS_ADDR, 8'd0, "virtio_event_idx_triggered_status");
-        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd5, "virtio_event_idx_triggered_used_idx");
+        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd7, "virtio_event_idx_triggered_used_idx");
         expect_read32(VIRTIO_BASE + 64'h060, 32'd1, "virtio_event_idx_triggers_interrupt");
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             word_t data;
