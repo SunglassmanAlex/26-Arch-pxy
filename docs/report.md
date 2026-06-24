@@ -32,7 +32,7 @@
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
 - 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
-- 新增 WFI 定向测试，覆盖 S 态合法 no-op 后继续执行并进入 S 态 ecall trap。
+- 新增 WFI 定向测试，覆盖 S 态合法 no-op 后继续执行并进入 S 态 ecall trap，以及 U 态 WFI illegal trap。
 - 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-plic`、`test-labplus-uart` 与 `test-labplus-virtio` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
 本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、SFENCE.VMA 定向测试、WFI 定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试和 simple virtio block/virtqueue MMIO 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
@@ -376,7 +376,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/sfence_vma_tb.sv`
   - 新增独立 core 级 Verilator testbench，验证 M 态 `SFENCE.VMA` 合法并触发 `if_flush`，以及 U 态 `SFENCE.VMA` 触发 illegal instruction trap。
 - `vsrc/test/wfi_tb.sv`
-  - 新增独立 core 级 Verilator testbench，验证 S 态 `WFI` 不触发 illegal trap，后续 `ecall` 能以 S-mode ecall cause 9 进入 M trap。
+  - 新增独立 core 级 Verilator testbench，验证 S 态 `WFI` 不触发 illegal trap，后续 `ecall` 能以 S-mode ecall cause 9 进入 M trap；随后再降到 U 态，验证 U 态 `WFI` 触发 illegal instruction trap。
 - `vsrc/test/difftest_stubs.sv`
   - 为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
 - `vsrc/util/SimMemoryWithVirtio.sv`
@@ -587,10 +587,11 @@ make test-labplus-wfi
 
 ```text
 wfi_smode_noop [OK]
+wfi_umode_illegal [OK]
 WFI directed test passed.
 ```
 
-该测试直接实例化 `core`，M 态设置 `mtvec=0x100`、`mepc=0x40`、`mstatus.MPP=S` 后执行 `mret` 进入 S 态。S 态指令流执行 `WFI; addi; ecall`，最后确认 trap 回 M 态时 `mcause=9` 且 `mepc=0x48`，说明 `WFI` 没有被错误识别为 illegal，也没有阻塞后续指令提交。
+该测试直接实例化 `core`，M 态设置 `mtvec=0x100`、`mepc=0x40`、`mstatus.MPP=S` 后执行 `mret` 进入 S 态。S 态指令流执行 `WFI; addi; ecall`，先确认 trap 回 M 态时 `mcause=9` 且 `mepc=0x48`，说明 `WFI` 没有被错误识别为 illegal，也没有阻塞后续指令提交。随后 trap handler 设置 `mepc=0x80`、清 `mstatus.MPP` 并 `mret` 到 U 态，再执行 `WFI`，确认 `mcause=2` 且 `mepc=0x80`。
 
 ### 7.12 PLIC MMIO 定向测试
 

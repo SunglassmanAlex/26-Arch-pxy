@@ -10,6 +10,7 @@ module wfi_tb
 ;
     localparam logic [1:0] PRIV_M = 2'b11;
     localparam addr_t S_PC = 64'h0000_0000_0000_0040;
+    localparam addr_t U_PC = 64'h0000_0000_0000_0080;
     localparam addr_t TRAP_PC = 64'h0000_0000_0000_0100;
     localparam u32 WFI = 32'h1050_0073;
     localparam u32 MRET = 32'h3020_0073;
@@ -26,6 +27,7 @@ module wfi_tb
     logic trint, swint, exint;
     addr_t if_req_q;
     logic if_resp_pending;
+    logic saw_smode_wfi;
 
     core dut(
         .clk(clk),
@@ -78,7 +80,12 @@ module wfi_tb
             S_PC:            instr_at = WFI;
             S_PC + 64'h04:   instr_at = addi(5'd5, 5'd0, 12'sh001);
             S_PC + 64'h08:   instr_at = ECALL;
-            TRAP_PC:         instr_at = addi(5'd0, 5'd0, 12'sh000);
+            U_PC:            instr_at = WFI;
+            U_PC + 64'h04:   instr_at = addi(5'd6, 5'd0, 12'sh001);
+            TRAP_PC:         instr_at = addi(5'd1, 5'd0, 12'sh080);
+            TRAP_PC + 64'h04: instr_at = csrw(CSR_MEPC, 5'd1);
+            TRAP_PC + 64'h08: instr_at = csrw(CSR_MSTATUS, 5'd0);
+            TRAP_PC + 64'h0c: instr_at = MRET;
             default:         instr_at = addi(5'd0, 5'd0, 12'sh000);
         endcase
     endfunction
@@ -119,6 +126,7 @@ module wfi_tb
         trint = 1'b0;
         swint = 1'b0;
         exint = 1'b0;
+        saw_smode_wfi = 1'b0;
         repeat (3) @(posedge clk);
         reset = 1'b0;
 
@@ -128,7 +136,14 @@ module wfi_tb
                 if (dut.csr_mcause != 64'd9) begin
                     $fatal(1, "unexpected trap after WFI: mcause=%h", dut.csr_mcause);
                 end
+                saw_smode_wfi = 1'b1;
+            end
+            if ((priv_mode == PRIV_M) && (dut.csr_mepc == U_PC) && (dut.csr_mcause == 64'd2)) begin
+                if (!saw_smode_wfi) begin
+                    $fatal(1, "U-mode WFI trapped before S-mode WFI completed");
+                end
                 $display("wfi_smode_noop [OK]");
+                $display("wfi_umode_illegal [OK]");
                 $display("WFI directed test passed.");
                 $finish;
             end

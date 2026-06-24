@@ -40,7 +40,7 @@
   \item 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
   \item 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 \texttt{trint} 进入 S trap 的路径。
   \item 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
-  \item 新增 WFI 定向测试，覆盖 S 态合法 no-op 后继续执行并进入 S 态 ecall trap。
+  \item 新增 WFI 定向测试，覆盖 S 态合法 no-op 后继续执行并进入 S 态 ecall trap，以及 U 态 WFI illegal trap。
   \item 新增 \texttt{test-labplus-2/3/4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart} 与 \texttt{test-labplus-virtio} Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 \end{itemize}
 
@@ -340,7 +340,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   \item \texttt{vsrc/test/mmu\_page\_fault\_tb.sv}：新增独立 Verilator testbench，直接实例化 \texttt{MMU}；构造固定三层 Sv39 页表，验证 instruction/load/store page fault 与正常 load 翻译。
   \item \texttt{vsrc/test/s\_interrupt\_pending\_tb.sv}：新增独立 core 级 Verilator testbench，用手写 CSR 指令初始化委托和 S 态中断使能；验证 \texttt{trint} 在 \texttt{mideleg.STIP=1}、\texttt{mie.STIE=1}、\texttt{mstatus.SIE=1} 后进入 S trap，\texttt{scause} 为 interrupt cause 5。
   \item \texttt{vsrc/test/sfence\_vma\_tb.sv}：新增独立 core 级 Verilator testbench，验证 M 态 \texttt{SFENCE.VMA} 合法并触发 \texttt{if\_flush}，以及 U 态 \texttt{SFENCE.VMA} 触发 illegal instruction trap。
-  \item \texttt{vsrc/test/wfi\_tb.sv}：新增独立 core 级 Verilator testbench，验证 S 态 \texttt{WFI} 不触发 illegal trap，后续 \texttt{ecall} 能以 S-mode ecall cause 9 进入 M trap。
+  \item \texttt{vsrc/test/wfi\_tb.sv}：新增独立 core 级 Verilator testbench，验证 S 态 \texttt{WFI} 不触发 illegal trap，后续 \texttt{ecall} 能以 S-mode ecall cause 9 进入 M trap；随后再降到 U 态，验证 U 态 \texttt{WFI} 触发 illegal instruction trap。
   \item \texttt{vsrc/test/difftest\_stubs.sv}：为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
   \item \texttt{vsrc/util/SimMemoryWithVirtio.sv}：新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 \texttt{0x10001000} virtio/simple-block MMIO；支持 virtio-blk config 读字段、\texttt{ConfigGeneration}、包含 \texttt{SIZE\_MAX/SEG\_MAX/BLK\_SIZE} 的 feature negotiation、\texttt{Status=0} reset、单 queue 的 descriptor/avail/used ring、indirect descriptor、一次 \texttt{QueueNotify} drain 多个 pending avail entry 和 event idx block read/write 子集，并支持 \texttt{+simple\_blk\_image=...} 从二进制镜像初始化 simple-block disk；新增 PLIC MMIO 模型，拦截 \texttt{0x0c000000} 到 \texttt{0x0fffffff}，支持 source priority、pending、M/S enable、threshold、claim/complete；新增 \texttt{0x10000000} 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、FCR trigger/clear、MCR、SCR、LSR overrun、THR TX 输出、THRE interrupt、RX FIFO timeout、16B RBR RX FIFO 和 RX/THRE/RLS interrupt 到 PLIC source 10。
   \item \texttt{vsrc/SimTop.sv}：将仿真 UART TX/RX 端口接到 difftest 顶层 \texttt{io\_uart\_out\_valid/io\_uart\_out\_ch/io\_uart\_in\_*}。
@@ -474,10 +474,11 @@ SFENCE.VMA directed test passed.
 \begin{Verbatim}[fontsize=\small]
 make test-labplus-wfi
 wfi_smode_noop [OK]
+wfi_umode_illegal [OK]
 WFI directed test passed.
 \end{Verbatim}
 
-该测试直接实例化 \texttt{core}，M 态设置 \texttt{mtvec=0x100}、\texttt{mepc=0x40}、\texttt{mstatus.MPP=S} 后执行 \texttt{mret} 进入 S 态。S 态指令流执行 \texttt{WFI; addi; ecall}，最后确认 trap 回 M 态时 \texttt{mcause=9} 且 \texttt{mepc=0x48}，说明 \texttt{WFI} 没有被错误识别为 illegal，也没有阻塞后续指令提交。
+该测试直接实例化 \texttt{core}，M 态设置 \texttt{mtvec=0x100}、\texttt{mepc=0x40}、\texttt{mstatus.MPP=S} 后执行 \texttt{mret} 进入 S 态。S 态指令流执行 \texttt{WFI; addi; ecall}，先确认 trap 回 M 态时 \texttt{mcause=9} 且 \texttt{mepc=0x48}，说明 \texttt{WFI} 没有被错误识别为 illegal，也没有阻塞后续指令提交。随后 trap handler 设置 \texttt{mepc=0x80}、清 \texttt{mstatus.MPP} 并 \texttt{mret} 到 U 态，再执行 \texttt{WFI}，确认 \texttt{mcause=2} 且 \texttt{mepc=0x80}。
 
 \subsection{PLIC MMIO 定向测试}
 
