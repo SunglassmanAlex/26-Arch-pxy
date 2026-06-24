@@ -216,7 +216,7 @@ RISC-V Sv39 的叶子 PTE 中，`A` 表示 accessed，`D` 表示 dirty。为了�
 - `QueueNotify=0` 时从 `virt_last_avail_idx` drain 到当前 `avail.idx`，逐个读取 pending head descriptor，并按 virtio block 的三段 descriptor 链处理：request header、512B data buffer、1B status。
 - 当 head descriptor 带 `VIRTQ_DESC_F_INDIRECT` 时，将其 `addr/len` 解释为 indirect descriptor table，并从 table 内继续解析三段链。
 - 支持 `VIRTIO_BLK_T_IN=0` 从 disk 读入 driver writable buffer，支持 `VIRTIO_BLK_T_OUT=1` 从 driver buffer 写回 disk；完成后写 status byte、used ring element 和 used idx。
-- 完成 queue 请求后更新 used ring。未协商 `VIRTIO_RING_F_EVENT_IDX` 时遵守 avail flags 的 `NO_INTERRUPT` 位；协商后读取 avail ring 末尾的 `used_event`，按 `vring_need_event` 规则决定是否置位 `InterruptStatus[0]` 和 PLIC source 1 pending；软件可通过 `InterruptACK` 清除 virtio 中断状态。
+- 完成 queue 请求后更新 used ring。未协商 `VIRTIO_RING_F_EVENT_IDX` 时遵守 avail flags 的 `NO_INTERRUPT` 位；协商后读取 avail ring 末尾的 `used_event`，按 `vring_need_event` 规则决定是否置位 `InterruptStatus[0]` 和 PLIC source 1 pending；软件可通过 `InterruptACK` 清除 virtio 中断状态，并在状态全部清空时撤销 PLIC source 1 pending。
 - 支持软件向 `Status` 写 0 触发设备 reset：清空 driver/device feature selector、driver features、queue 配置、used ring 进度、virtio interrupt status、virtio PLIC pending 和 simple-block 命令状态，但不清除 disk 内容或静态 block config。
 
 该 queue 子集已经覆盖 feature negotiation、descriptor/avail/used ring 的基本读写路径、indirect descriptor 链、一次 notify 多 pending entry drain、event idx 中断节流和基础设备 reset，但还没有实现多 queue、更完整的 block feature 组合和动态配置变更通知。
@@ -382,7 +382,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/uart_mmio_tb.sv`
   - 新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
 - `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
-  - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、`ConfigGeneration`、未知命令/越界 sector 错误状态、block/ring feature negotiation、virtqueue read/write、indirect descriptor read、一次 `QueueNotify` 多 pending entry、event idx 抑制/触发中断、`Status=0` reset、512B sector write/read。
+  - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、`ConfigGeneration`、未知命令/越界 sector 错误状态、block/ring feature negotiation、virtqueue read/write、indirect descriptor read、一次 `QueueNotify` 多 pending entry、`InterruptACK` 清 PLIC pending、event idx 抑制/触发中断、`Status=0` reset、512B sector write/read。
 - `Makefile`
   - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-plic`、`test-labplus-uart` 和 `test-labplus-virtio`。
 - `ready-to-run/lab+/`
@@ -744,8 +744,10 @@ virtio_queue_read_used_idx [OK]
 virtio_queue_read_used_id [OK]
 virtio_queue_read_used_len [OK]
 virtio_queue_interrupt_status [OK]
+plic_virtio_pending_after_queue [OK]
 virtio_queue_read_data [OK]
 virtio_queue_interrupt_ack [OK]
+plic_virtio_pending_after_ack [OK]
 virtio_queue_write_status [OK]
 virtio_queue_write_used_idx [OK]
 virtio_queue_write_used_id [OK]
@@ -792,7 +794,7 @@ simple_block_read_status [OK]
 simple virtio block MMIO test passed.
 ```
 
-测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 `+simple_blk_image=build/simple-virtio/simple-blk.img` 传给模型；模型容量为 8192 sectors，即 4 MiB，测试镜像只覆盖前 16 个 sector；reset 后读取 virtio magic/version/device/vendor、simple-block 容量寄存器、`ConfigGeneration` 和标准 virtio-blk config 字段；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 `cmd=99` 检查 `status=1`，再访问越界 `sector=8192` 检查 `status=2`；然后读取 feature bank 0/1，验证 unsupported feature 会使 `FEATURES_OK` 被清除，再协商 `SIZE_MAX/SEG_MAX/BLK_SIZE`、indirect descriptor、event idx 和 version 1；之后配置 queue 0，在 RAM 中构造三段 descriptor 链，覆盖 virtqueue read 的 status、used ring、interrupt status/ack 和数据内容；再用 virtqueue write 写回 sector 4，并用 simple read 回读确认 disk 被更新；随后构造带 `VIRTQ_DESC_F_INDIRECT` 的 head descriptor，验证 indirect table 内三段链也能完成读请求；接着一次性向 avail ring 放入两个 pending entry，只写一次 `QueueNotify`，验证模型能连续完成两个读请求、写入两个 used ring entry 并按 `used_event` 触发中断；再设置 used_event 分别覆盖一次中断被抑制和一次中断被触发的 event idx 路径；随后向 `Status` 写 0，确认 status、interrupt status、feature selector、driver features、queue 配置、config generation 和 simple-block status 符合 reset 后状态；最后保留原 simple sector write/read 路径，确认向后兼容。
+测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 `+simple_blk_image=build/simple-virtio/simple-blk.img` 传给模型；模型容量为 8192 sectors，即 4 MiB，测试镜像只覆盖前 16 个 sector；reset 后读取 virtio magic/version/device/vendor、simple-block 容量寄存器、`ConfigGeneration` 和标准 virtio-blk config 字段；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 `cmd=99` 检查 `status=1`，再访问越界 `sector=8192` 检查 `status=2`；然后读取 feature bank 0/1，验证 unsupported feature 会使 `FEATURES_OK` 被清除，再协商 `SIZE_MAX/SEG_MAX/BLK_SIZE`、indirect descriptor、event idx 和 version 1；之后配置 queue 0，在 RAM 中构造三段 descriptor 链，覆盖 virtqueue read 的 status、used ring、interrupt status/ack、PLIC pending 清除和数据内容；再用 virtqueue write 写回 sector 4，并用 simple read 回读确认 disk 被更新；随后构造带 `VIRTQ_DESC_F_INDIRECT` 的 head descriptor，验证 indirect table 内三段链也能完成读请求；接着一次性向 avail ring 放入两个 pending entry，只写一次 `QueueNotify`，验证模型能连续完成两个读请求、写入两个 used ring entry 并按 `used_event` 触发中断；再设置 used_event 分别覆盖一次中断被抑制和一次中断被触发的 event idx 路径；随后向 `Status` 写 0，确认 status、interrupt status、feature selector、driver features、queue 配置、config generation 和 simple-block status 符合 reset 后状态；最后保留原 simple sector write/read 路径，确认向后兼容。
 
 ## 8. 后续可做项
 

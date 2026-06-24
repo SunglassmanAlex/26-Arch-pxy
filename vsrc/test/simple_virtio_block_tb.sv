@@ -17,6 +17,8 @@ module simple_virtio_block_tb
     localparam addr_t VQ_REQ2_ADDR = 64'h0000_0000_8000_2800;
     localparam addr_t VQ_BUF2_ADDR = 64'h0000_0000_8000_2900;
     localparam addr_t VQ_STATUS2_ADDR = 64'h0000_0000_8000_2b00;
+    localparam addr_t PLIC_PENDING = 64'h0000_0000_0c00_1000;
+    localparam int VIRTIO_IRQ = 1;
     localparam word_t MAGIC_VERSION = {32'd2, 32'h7472_6976};
     localparam word_t DEVICE_VENDOR = {32'h554d_4551, 32'd2};
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
@@ -433,6 +435,7 @@ module simple_virtio_block_tb
         expect_ram_u32(VQ_USED_ADDR + 64'd4, 32'd0, "virtio_queue_read_used_id");
         expect_ram_u32(VQ_USED_ADDR + 64'd8, 32'd513, "virtio_queue_read_used_len");
         expect_read32(VIRTIO_BASE + 64'h060, 32'd1, "virtio_queue_interrupt_status");
+        expect_read32(PLIC_PENDING, 32'(1 << VIRTIO_IRQ), "plic_virtio_pending_after_queue");
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             word_t data;
             data = ram_read_word(VQ_BUF_ADDR + 64'(word_idx * 8));
@@ -444,6 +447,7 @@ module simple_virtio_block_tb
         $display("virtio_queue_read_data [OK]");
         cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
         expect_read32(VIRTIO_BASE + 64'h060, 32'd0, "virtio_queue_interrupt_ack");
+        expect_read32(PLIC_PENDING, 32'd0, "plic_virtio_pending_after_ack");
 
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(VQ_BUF_ADDR + 64'(word_idx * 8), pattern(word_idx));

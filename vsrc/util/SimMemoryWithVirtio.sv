@@ -966,6 +966,8 @@ module SimMemoryWithVirtio
 
     task automatic virtio_write32(input addr_t addr, input u32 data);
         addr_t offset;
+        u32 cleared_interrupt_status;
+        u32 next_interrupt_status;
         begin
             offset = addr - VIRTIO_BASE;
             unique case (offset)
@@ -982,7 +984,14 @@ module SimMemoryWithVirtio
                 64'h038: virt_queue_num <= data;
                 64'h044: virt_queue_ready <= data;
                 64'h050: run_virtqueue_command(data);
-                64'h064: virt_interrupt_status <= virt_interrupt_status & ~data;
+                64'h064: begin
+                    cleared_interrupt_status = virt_interrupt_status & data;
+                    next_interrupt_status = virt_interrupt_status & ~data;
+                    virt_interrupt_status <= next_interrupt_status;
+                    if ((cleared_interrupt_status != 32'd0) && (next_interrupt_status == 32'd0)) begin
+                        plic_pending[PLIC_VIRTIO_SOURCE] <= 1'b0;
+                    end
+                end
                 64'h070: begin
                     if (data == 32'd0) begin
                         virt_status <= 32'd0;
