@@ -199,7 +199,7 @@ RISC-V Sv39 的叶子 PTE 中，\texttt{A} 表示 accessed，\texttt{D} 表示 d
   \item \texttt{0x10001000}：低 32 位为 virtio magic \texttt{0x74726976}，高 32 位为 version \texttt{2}。
   \item \texttt{0x10001008}：低 32 位为 device id \texttt{2}，表示 block device；高 32 位为 vendor \texttt{0x554d4551}。
   \item \texttt{0x100010fc}：\texttt{ConfigGeneration}，当前 block config 为静态配置，因此 reset 前后保持 \texttt{0}。
-  \item 标准 virtio-blk config 读字段：\texttt{0x10001100/0x10001104} 为 64-bit capacity，当前 16 sectors；\texttt{0x10001108} 为 \texttt{size\_max=512}；\texttt{0x1000110c} 为 \texttt{seg\_max=1}；\texttt{0x10001114} 为 \texttt{blk\_size=512}。
+  \item 标准 virtio-blk config 读字段：\texttt{0x10001100/0x10001104} 为 64-bit capacity，当前 8192 sectors，也就是 4 MiB；\texttt{0x10001108} 为 \texttt{size\_max=512}；\texttt{0x1000110c} 为 \texttt{seg\_max=1}；\texttt{0x10001114} 为 \texttt{blk\_size=512}。
 \end{itemize}
 
 简化同步块设备扩展：
@@ -209,7 +209,7 @@ RISC-V Sv39 的叶子 PTE 中，\texttt{A} 表示 accessed，\texttt{D} 表示 d
   \item \texttt{0x10001108}：DMA memory address。
   \item \texttt{0x10001110}：command，\texttt{1} 表示从 disk 读 512B 到 RAM，\texttt{2} 表示从 RAM 写 512B 到 disk。
   \item \texttt{0x10001118}：status，\texttt{0} 表示完成，\texttt{1} 表示未知命令，\texttt{2} 表示 sector 越界。
-  \item \texttt{0x10001120}：sector 数量，当前为 16。
+  \item \texttt{0x10001120}：sector 数量，当前为 8192。
   \item \texttt{0x10001128}：sector 大小，当前为 512B。
 \end{itemize}
 
@@ -227,7 +227,7 @@ RISC-V Sv39 的叶子 PTE 中，\texttt{A} 表示 accessed，\texttt{D} 表示 d
 
 该 queue 子集已经覆盖 feature negotiation、descriptor/avail/used ring 的基本读写路径、indirect descriptor 链、event idx 中断节流和基础设备 reset，但还没有实现多 queue、更完整的 block feature 组合和动态配置变更通知。
 
-为了让该同步块设备能承载更接近 xv6 的文件系统内容，模型额外支持运行时 plusarg：\texttt{+simple\_blk\_image=/path/to/fs.img}。仿真 reset 第一次进入时会先用默认 \texttt{SBLK} pattern 填满 16 个 512B sector，再按 little-endian byte 顺序用镜像文件覆盖初始 disk 内容；镜像短于容量时只覆盖前缀，未覆盖部分保持默认 pattern。之后软件写盘只修改运行时 \texttt{disk}，再次 reset 会从 \texttt{disk\_init} 恢复到镜像初值。未提供 plusarg 时行为与原来的 pattern 初始化一致。
+为了让该同步块设备能承载更接近 xv6 的文件系统内容，模型额外支持运行时 plusarg：\texttt{+simple\_blk\_image=/path/to/fs.img}。仿真 reset 第一次进入时会先用默认 \texttt{SBLK} pattern 填满 8192 个 512B sector，再按 little-endian byte 顺序用镜像文件覆盖初始 disk 内容；镜像短于容量时只覆盖前缀，未覆盖部分保持默认 pattern。之后软件写盘只修改运行时 \texttt{disk}，再次 reset 会从 \texttt{disk\_init} 恢复到镜像初值。未提供 plusarg 时行为与原来的 pattern 初始化一致。
 
 \subsection{仿真侧 PLIC MMIO 模型}
 
@@ -600,7 +600,7 @@ UART MMIO directed tests passed.
 \begin{Verbatim}[fontsize=\small]
 make test-labplus-virtio
 simple_block_image_created [OK]
-simple block image loaded: build/simple-virtio/simple-blk.img (8192 bytes, capacity 8192 bytes)
+simple block image loaded: build/simple-virtio/simple-blk.img (8192 bytes, capacity 4194304 bytes)
 virtio_magic_version [OK]
 virtio_device_vendor [OK]
 simple_block_capacity [OK]
@@ -665,7 +665,7 @@ simple_block_read_status [OK]
 simple virtio block MMIO test passed.
 \end{Verbatim}
 
-测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 \texttt{+simple\_blk\_image=build/simple-virtio/simple-blk.img} 传给模型；reset 后读取 virtio magic/version/device/vendor、simple-block 容量寄存器、\texttt{ConfigGeneration} 和标准 virtio-blk config 字段；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 \texttt{cmd=99} 检查 \texttt{status=1}，再访问越界 \texttt{sector=16} 检查 \texttt{status=2}；然后读取 feature bank 0/1，验证 unsupported feature 会使 \texttt{FEATURES\_OK} 被清除，再协商 \texttt{SIZE\_MAX/SEG\_MAX/BLK\_SIZE}、indirect descriptor、event idx 和 version 1；之后配置 queue 0，在 RAM 中构造三段 descriptor 链，覆盖 virtqueue read 的 status、used ring、interrupt status/ack 和数据内容；再用 virtqueue write 写回 sector 4，并用 simple read 回读确认 disk 被更新；随后构造带 \texttt{VIRTQ\_DESC\_F\_INDIRECT} 的 head descriptor，验证 indirect table 内三段链也能完成读请求；再设置 used\_event 分别覆盖一次中断被抑制和一次中断被触发的 event idx 路径；随后向 \texttt{Status} 写 0，确认 status、interrupt status、feature selector、driver features、queue 配置、config generation 和 simple-block status 符合 reset 后状态；最后保留原 simple sector write/read 路径，确认向后兼容。
+测试流程为：testbench 先生成 8192B 二进制镜像，并通过 Makefile 的 \texttt{+simple\_blk\_image=build/simple-virtio/simple-blk.img} 传给模型；模型容量为 8192 sectors，即 4 MiB，测试镜像只覆盖前 16 个 sector；reset 后读取 virtio magic/version/device/vendor、simple-block 容量寄存器、\texttt{ConfigGeneration} 和标准 virtio-blk config 字段；先执行一次 sector 5 read，逐 word 检查 RAM 中数据来自镜像初始化；随后发起未知命令 \texttt{cmd=99} 检查 \texttt{status=1}，再访问越界 \texttt{sector=8192} 检查 \texttt{status=2}；然后读取 feature bank 0/1，验证 unsupported feature 会使 \texttt{FEATURES\_OK} 被清除，再协商 \texttt{SIZE\_MAX/SEG\_MAX/BLK\_SIZE}、indirect descriptor、event idx 和 version 1；之后配置 queue 0，在 RAM 中构造三段 descriptor 链，覆盖 virtqueue read 的 status、used ring、interrupt status/ack 和数据内容；再用 virtqueue write 写回 sector 4，并用 simple read 回读确认 disk 被更新；随后构造带 \texttt{VIRTQ\_DESC\_F\_INDIRECT} 的 head descriptor，验证 indirect table 内三段链也能完成读请求；再设置 used\_event 分别覆盖一次中断被抑制和一次中断被触发的 event idx 路径；随后向 \texttt{Status} 写 0，确认 status、interrupt status、feature selector、driver features、queue 配置、config generation 和 simple-block status 符合 reset 后状态；最后保留原 simple sector write/read 路径，确认向后兼容。
 
 \section{后续可做项}
 

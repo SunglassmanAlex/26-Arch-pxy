@@ -54,7 +54,7 @@ module SimMemoryWithVirtio
     localparam u8 VIRTIO_BLK_S_OK = 8'd0;
     localparam u8 VIRTIO_BLK_S_IOERR = 8'd1;
     localparam u8 VIRTIO_BLK_S_UNSUPP = 8'd2;
-    localparam int SIMPLE_BLK_SECTORS = 16;
+    localparam int SIMPLE_BLK_SECTORS = 8192;
     localparam int SIMPLE_BLK_WORDS_PER_SECTOR = 64;
     localparam int SIMPLE_BLK_WORDS = SIMPLE_BLK_SECTORS * SIMPLE_BLK_WORDS_PER_SECTOR;
     localparam int SIMPLE_BLK_BYTES = SIMPLE_BLK_WORDS * 8;

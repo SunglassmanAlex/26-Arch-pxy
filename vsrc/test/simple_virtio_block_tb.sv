@@ -32,6 +32,7 @@ module simple_virtio_block_tb
     localparam u32 VIRTIO_STATUS_ACK_DRIVER = 32'h0000_0003;
     localparam u32 VIRTIO_STATUS_FEATURES_OK = 32'h0000_0008;
     localparam u32 VIRTIO_STATUS_DRIVER_OK = 32'h0000_0004;
+    localparam u32 SIMPLE_BLK_SECTORS = 32'd8192;
     localparam string SIMPLE_BLK_IMAGE_PATH = "build/simple-virtio/simple-blk.img";
 
     logic clk, reset;
@@ -374,9 +375,9 @@ module simple_virtio_block_tb
 
         expect_read(VIRTIO_BASE + 64'h000, MAGIC_VERSION, "virtio_magic_version");
         expect_read(VIRTIO_BASE + 64'h008, DEVICE_VENDOR, "virtio_device_vendor");
-        expect_read(VIRTIO_BASE + 64'h120, 64'd16, "simple_block_capacity");
+        expect_read(VIRTIO_BASE + 64'h120, {32'd0, SIMPLE_BLK_SECTORS}, "simple_block_capacity");
         expect_read(VIRTIO_BASE + 64'h128, 64'd512, "simple_block_sector_size");
-        expect_read32(VIRTIO_BASE + 64'h100, 32'd16, "virtio_config_capacity_low");
+        expect_read32(VIRTIO_BASE + 64'h100, SIMPLE_BLK_SECTORS, "virtio_config_capacity_low");
         expect_read32(VIRTIO_BASE + 64'h104, 32'd0, "virtio_config_capacity_high");
         expect_read32(VIRTIO_BASE + 64'h108, 32'd512, "virtio_config_size_max");
         expect_read32(VIRTIO_BASE + 64'h10c, 32'd1, "virtio_config_seg_max");
@@ -403,7 +404,7 @@ module simple_virtio_block_tb
         cbus_write(VIRTIO_BASE + 64'h100, 64'd5);
         cbus_write(VIRTIO_BASE + 64'h110, 64'd99);
         expect_read(VIRTIO_BASE + 64'h118, 64'd1, "simple_block_unknown_cmd_status");
-        cbus_write(VIRTIO_BASE + 64'h100, 64'd16);
+        cbus_write(VIRTIO_BASE + 64'h100, {32'd0, SIMPLE_BLK_SECTORS});
         cbus_write(VIRTIO_BASE + 64'h110, 64'd1);
         expect_read(VIRTIO_BASE + 64'h118, 64'd2, "simple_block_oob_status");
 
