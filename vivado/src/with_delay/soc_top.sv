@@ -157,11 +157,12 @@ module soc_top #(
 
 	logic cpu_clk;
 	logic clk_wiz_locked;
+	logic soc_reset;
 
 	/* mycpu */
 	mycpu_top_single mycpu_top_inst(
 		.clk(cpu_clk),
-		.reset(reset),
+		.reset(soc_reset),
 		.valid(valid),
 		.addr(addr),
 		.wdata(wdata),
@@ -180,7 +181,7 @@ module soc_top #(
 
 	/* RAM */
 	bram_wrapper #(SIMULATION) bram_wrapper_inst(
-		.clk(cpu_clk), .reset,
+		.clk(cpu_clk), .reset(soc_reset),
 		.valid(ram_valid),
 		.addr(ram_addr),
 		.wdata(ram_wdata),
@@ -194,25 +195,35 @@ module soc_top #(
 
 	/* Device */
 	device #(SIMULATION) device_inst (
+		.clk(clk),
+		.reset(soc_reset),
+		.cpu_clk(cpu_clk),
+		.led(led),
+		.sw(sw),
+		.tx(tx),
 		.valid(device_valid),
 		.addr(device_addr),
 		.wdata(device_wdata),
 		.rdata(device_rdata),
 		.wvalid(device_wvalid),
+		.size({5'b0, size}),
 		.ready(device_ready),
-		.last(device_last),
-		.*
+		.last(device_last)
 	);
 
-	if (SIMULATION)
+	if (SIMULATION) begin
 		assign cpu_clk = clk;
-	else
+		assign clk_wiz_locked = 1'b1;
+	end else begin
 		clk_wiz_0 clk_wiz_0(
 			.sys_clk(clk),
 			.reset(reset),
 			.cpu_clk(cpu_clk),
 			.locked(clk_wiz_locked)
 		);
+	end
+
+	assign soc_reset = reset | ~clk_wiz_locked;
 	
 
 endmodule
