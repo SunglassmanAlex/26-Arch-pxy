@@ -42,7 +42,7 @@
   \item 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 \texttt{trint} 进入 S trap 的路径。
   \item 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
   \item 新增 WFI 定向测试，覆盖 S 态合法 no-op 后继续执行并进入 S 态 ecall trap，以及 U 态 WFI illegal trap。
-  \item 新增 \texttt{test-labplus-2/3/4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart} 与 \texttt{test-labplus-virtio} Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+  \item 新增 \texttt{test-labplus-2/3/4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart}、\texttt{test-labplus-virtio} 与 \texttt{test-labplus-preboard} Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 \end{itemize}
 
 本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、SFENCE.VMA 定向测试、WFI 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试和 simple virtio block/virtqueue MMIO 定向测试。\texttt{lab+/4} 全量 \texttt{TEST=all} 已完成 benchmark 和 sys-test，最终输出 \texttt{Privileged test finished. Exit with code = 0}。当前官方 \texttt{all-test-privfull.bin} 中未包含真实 \texttt{ebreak} 指令，\texttt{breakpoint [X]} 来自测试程序自身的占位输出；补充 \texttt{EBREAK} 后该输出仍不会变化，不影响最终 privileged 测试收尾。
@@ -358,7 +358,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   \item \texttt{vsrc/test/uart\_mmio\_tb.sv}：新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、parity/framing/break line-status interrupt、break-only 不入队、modem-status loopback interrupt、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
   \item \texttt{vsrc/test/clint\_alias\_tb.sv}：新增 CLINT 地址别名定向测试，验证 legacy/QEMU 地址共享 \texttt{msip/mtimecmp/mtime} 状态，并覆盖 \texttt{swint/trint} 产生和清除。
   \item \texttt{vsrc/test/simple\_virtio\_block\_tb.sv}、\texttt{vsrc/test/ram\_dpi\_stubs.cpp}：新增 simple-block MMIO 定向测试和 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、\texttt{ConfigGeneration}、非 0 \texttt{QueueSel} 不可用且不污染 queue 0、未知命令/越界 sector 错误状态、block/ring feature negotiation、virtqueue read/write、indirect descriptor read、一次 \texttt{QueueNotify} 多 pending entry、\texttt{InterruptACK} 清 PLIC pending、event idx 抑制/触发中断、xv6 风格普通 avail flags 中断控制、\texttt{VIRTIO\_BLK\_T\_FLUSH} 两段链、\texttt{VIRTIO\_BLK\_T\_WRITE\_ZEROES} 清零 sector、\texttt{VIRTIO\_BLK\_T\_DISCARD} no-op 成功、\texttt{Status=0} reset、512B sector write/read。
-  \item \texttt{Makefile}：新增 \texttt{test-labplus-2}、\texttt{test-labplus-3}、\texttt{test-labplus-4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart} 和 \texttt{test-labplus-virtio}。
+  \item \texttt{Makefile}：新增 \texttt{test-labplus-2}、\texttt{test-labplus-3}、\texttt{test-labplus-4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart}、\texttt{test-labplus-virtio} 和 \texttt{test-labplus-preboard}。其中 \texttt{test-labplus-preboard} 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口。
   \item \texttt{ready-to-run/lab+/}：补充官方 Lab+ 测试二进制和汇编反汇编文件。
 \end{itemize}
 
@@ -827,6 +827,22 @@ CLINT alias directed tests passed.
 \end{Verbatim}
 
 该测试实例化 \texttt{SimMemoryWithVirtio}，覆盖与仿真顶层相同的地址映射路径。测试先验证原课程 \texttt{0x3800...} 地址仍可读写并驱动 \texttt{swint}，再验证 QEMU/xv6 \texttt{0x0200...} 地址写入后可以从 legacy 地址读到相同状态，最后通过交叉写 \texttt{mtime/mtimecmp} 验证两套地址共同影响 \texttt{trint} 的置位和清除。
+
+\subsection{上板前非 Vivado 集合回归}
+
+\begin{Verbatim}[fontsize=\small]
+make test-labplus-preboard
+MMU page fault directed tests passed.
+S-mode interrupt pending delegation test passed.
+SFENCE.VMA directed test passed.
+WFI directed test passed.
+CLINT alias directed tests passed.
+PLIC MMIO directed tests passed.
+UART MMIO directed tests passed.
+simple virtio block MMIO test passed.
+\end{Verbatim}
+
+该入口顺序运行 \texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart} 和 \texttt{test-labplus-virtio}。它不替代 Vivado 综合/实现和真实上板串口输出，但可以在没有板子的情况下快速确认 xv6/pre-board 相关的 CPU 特权、MMU fault、S 态中断、SFENCE/WFI、CLINT/PLIC/UART/virtio 仿真模型没有被后续改动破坏。
 
 \section{后续可做项}
 

@@ -21,6 +21,7 @@ no_arguments:
 	@echo "  - test-labplus-plic: Run Lab+ directed PLIC MMIO test"
 	@echo "  - test-labplus-uart: Run Lab+ directed UART MMIO test"
 	@echo "  - test-labplus-virtio: Run Lab+ directed simple virtio block test"
+	@echo "  - test-labplus-preboard: Run Lab+ non-Vivado pre-board regression"
 
 init:
 	git submodule update --init --recursive
@@ -166,6 +167,16 @@ test-labplus-virtio:
 	  vsrc/test/ram_dpi_stubs.cpp
 	./build/simple-virtio/simple_virtio_block_tb +simple_blk_image=build/simple-virtio/simple-blk.img
 
+test-labplus-preboard:
+	$(MAKE) test-labplus-pagefault
+	$(MAKE) test-labplus-sinterrupt
+	$(MAKE) test-labplus-sfence
+	$(MAKE) test-labplus-wfi
+	$(MAKE) test-labplus-clint
+	$(MAKE) test-labplus-plic
+	$(MAKE) test-labplus-uart
+	$(MAKE) test-labplus-virtio
+
 clean:
 	rm -rf build
 
@@ -173,4 +184,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim
+.PHONY: emu clean sim test-labplus-preboard
