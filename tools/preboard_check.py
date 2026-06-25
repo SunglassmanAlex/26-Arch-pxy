@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECT = REPO_ROOT / "vivado" / "test-cpu" / "project" / "project_1.xpr"
 PROJECT_DIR = PROJECT.parent
 IMPL_DIR = PROJECT_DIR / "project_1.runs" / "impl_1"
+REBUILD_SCRIPT = REPO_ROOT / "tools" / "rebuild_nexys4_bitstream.tcl"
 
 EXPECTED_PART = "xc7a100tcsg324-1"
 EXPECTED_TOP = "basys3_top"
@@ -211,6 +212,11 @@ def report_bitstream_freshness(bitstream: Path, inputs: set[Path]) -> None:
 
 def main() -> int:
     require(PROJECT.exists(), "vivado_project_exists", str(PROJECT))
+    require(
+        REBUILD_SCRIPT.exists(),
+        "vivado_rebuild_script_exists",
+        str(REBUILD_SCRIPT),
+    )
 
     root = ET.parse(PROJECT).getroot()
     bitstream_inputs = {PROJECT}

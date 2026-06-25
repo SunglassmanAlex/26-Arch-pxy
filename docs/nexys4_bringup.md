@@ -18,6 +18,14 @@
 
 注意：当前 `.bit` 的生成时间早于后续修改过的 `device.sv`、`soc_top.sv` 和 `project_1.xpr`。它可用于确认 Vivado 工程已有可烧写产物，但不应作为最终最新版上板结果；真实上板前应在 Vivado 中重新跑 implementation，并再次执行 `make test-labplus-vivado-precheck` 比对新的 manifest。
 
+在安装 Vivado 的机器上，可以直接运行：
+
+```bash
+make vivado-nexys4-bitstream
+```
+
+该目标会调用 `tools/rebuild_nexys4_bitstream.tcl` 打开当前工程，重新运行 `synth_1` 和 `impl_1 -to_step write_bitstream`。如需调整 Vivado 并行度，可使用 `VIVADO_JOBS=16 make vivado-nexys4-bitstream`。
+
 ## 2. Vivado routed report 状态
 
 `make test-labplus-vivado-precheck` 已检查以下 routed artifacts：
@@ -96,6 +104,8 @@ make test-labplus-vivado-precheck
 ```bash
 make test-labplus-preboard
 ```
+
+如果机器上有 Vivado，并且 `make test-labplus-vivado-precheck` 提示 `vivado_bitstream_stale [WARN]`，应先运行 `make vivado-nexys4-bitstream` 重建 `.bit`，再运行上述检查集合。
 
 该入口串行执行 Vivado precheck、Nexys4 board device UART/LED、MMU page fault、S-mode interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、virtio 和 xv6 platform smoke 测试。当前这些测试已经通过，关键收尾输出包括：
 
