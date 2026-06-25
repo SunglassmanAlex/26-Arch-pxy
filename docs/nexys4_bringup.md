@@ -91,10 +91,11 @@ make test-labplus-vivado-precheck
 make test-labplus-preboard
 ```
 
-该入口串行执行 Vivado precheck、MMU page fault、S-mode interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、virtio 和 xv6 platform smoke 测试。当前这些测试已经通过，关键收尾输出包括：
+该入口串行执行 Vivado precheck、Nexys4 board device UART/LED、MMU page fault、S-mode interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、virtio 和 xv6 platform smoke 测试。当前这些测试已经通过，关键收尾输出包括：
 
 ```text
 Vivado pre-board check passed.
+board device UART/LED directed test passed.
 MMU page fault directed tests passed.
 S-mode interrupt pending delegation test passed.
 SFENCE.VMA directed test passed.

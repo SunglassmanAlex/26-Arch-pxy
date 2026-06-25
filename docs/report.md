@@ -33,14 +33,16 @@
 - 新增 xv6/QEMU platform smoke 集成测试：在同一个 `SimMemoryWithVirtio` 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、virtio/uart 多源优先级仲裁和 complete 清中断路径。
 - 新增 Vivado 上板前静态检查：解析 `project_1.xpr`、Nexys4 DDR XDC 和顶层 wrapper，确认 part、工程文件、约束端口管脚和 `basys3_top` 兼容包装没有跑偏；同时检查已有 bitstream、route status、routed DRC 和 timing summary，确认 route errors=0、DRC violations=0、WNS 非负且 timing constraints met。
 - 扩展 Vivado precheck 输出：自动打印当前 `.bit` 的 path、size、mtime、SHA256、`.bin` 缺失提示和 timing WNS，便于上板时比对烧写文件。
+- 新增 Nexys4 board device UART/LED 定向测试：直接仿真 `device #(.SIMULATION(0))`，覆盖 reset 后 LED/TX idle、开关读数、finish LED、真实 UART bit sampling 和完整 `Hello World!\r\n` 输出。
+- 修复板级 UART 自动字符串发送：避免 `txData` 在一帧发送过程中被下一字符覆盖，并将串口 ROM 中的小写 `w` 修正为大写 `W`，保证真实串口输出和预期一致。
 - 新增 Nexys4 DDR 上板前 bring-up 清单：记录 bitstream 路径、大小、SHA256、routed report 状态、管脚、串口参数、预期 LED/UART 行为和实体板排查步骤。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
 - 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
 - 新增 WFI 定向测试，覆盖 S 态合法 no-op 后继续执行并进入 S 态 ecall trap，以及 U 态 WFI illegal trap。
-- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
-本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、SFENCE.VMA 定向测试、WFI 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试、xv6/QEMU platform smoke 集成测试和 Vivado 上板前静态检查。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、SFENCE.VMA 定向测试、WFI 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查和 Nexys4 board device UART/LED 定向测试。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 ## 3. Atomic Extension 设计
 
@@ -367,6 +369,10 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   - 显式连接 `if_flush`，供取指侧 instruction line buffer 在控制流/地址翻译变化时失效。
 - `vsrc/VTop.sv`、`vivado/src/with_delay/soc_top.sv`
   - 连接 `if_flush` 到 `IBusToCBus`，保持仿真顶层和上板顶层一致。
+- `vivado/src/device.sv`
+  - 修复板级 UART 自动发送路径：`txData` 只在 UART idle 并接收新字符时装载，避免 finish 后 `Hello World` 字符串的一帧中途被下一字符覆盖。
+  - 将自动字符串中的 `w` 修正为 `W`，保证真实串口输出为 `Hello World!\r\n`。
+  - 显式化 `idx` reset 宽度，消除 Verilator 位宽 warning。
 - `vsrc/include/common.sv`
   - 扩展 CBus/IBus/DBus 响应，增加 `page_fault`。
   - 扩展 CBus 请求，增加 `is_instr` 标记。
@@ -415,12 +421,14 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、`ConfigGeneration`、非 0 `QueueSel` 不可用且不污染 queue 0、未知命令/越界 sector 错误状态、block/ring feature negotiation、virtqueue read/write、indirect descriptor read、一次 `QueueNotify` 多 pending entry、`InterruptACK` 清 PLIC pending、event idx 抑制/触发中断、xv6 风格普通 avail flags 中断控制、`VIRTIO_BLK_T_FLUSH` 两段链、`VIRTIO_BLK_T_WRITE_ZEROES` 清零 sector、`VIRTIO_BLK_T_DISCARD` no-op 成功、`Status=0` reset、512B sector write/read。
 - `vsrc/test/xv6_platform_smoke_tb.sv`
   - 新增 xv6/QEMU platform smoke 集成测试，直接访问 QEMU 地址下的 CLINT、PLIC S context、16550 UART 和 virtio-mmio，验证 `msip/mtimecmp/mtime` 中断源、PLIC S enable/threshold/claim、UART RX interrupt claim 后 RBR 读取、virtio source 1 interrupt，以及 virtio/UART 同时 pending 时按 priority 仲裁并逐个 complete。
+- `vsrc/test/board_device_tb.sv`
+  - 新增 Nexys4 board device 定向测试，实例化 `device #(.SIMULATION(0))`，验证 reset 后 LED/TX idle、SW MMIO 读数、finish LED 点亮和 9600 baud UART bit-level 采样出的 `Hello World!\r\n`。
 - `tools/preboard_check.py`
   - 新增上板前静态检查脚本，使用 XML parser 读取 Vivado `project_1.xpr`，验证 Nexys4 DDR part、sources/constrs/sim/IP fileset 中的关键文件存在，检查 `basys3_top` 兼容 wrapper 指向 `nexys4_top`，检查 `clk/btnC/sw/led/RsTx/RsRx` 的 Nexys4 DDR XDC 管脚约束，并确认已有 `basys3_top.bit`、route status、routed DRC 和 timing summary 报告有效；同时输出 `.bit` path/size/mtime/SHA256、`.bin` 缺失提示和 timing WNS。
 - `docs/nexys4_bringup.md`
   - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck` 和 `test-labplus-preboard`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device` 和 `test-labplus-preboard`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -1048,7 +1056,34 @@ Vivado pre-board check passed.
 
 该检查不调用 Vivado，也不重新生成 bitstream；它对工程元数据、文本约束和已有实现报告做静态校验，并打印当前 `.bit` manifest。这样在没有板子和 GUI 的情况下，仍能尽早发现上板常见问题：工程 part 不是 Nexys4 DDR、关键 `with_delay` 源文件或 IP/XDC 未列入 `.xpr`、顶层 wrapper 改丢、串口/时钟/按钮/LED 管脚约束不匹配、没有可烧写 `.bit`，烧写文件和清单 SHA 不一致，或 routed report 中出现 routing/DRC/timing 问题。
 
-### 7.18 上板前自动集合回归
+### 7.18 Nexys4 board device UART/LED 测试
+
+运行：
+
+```bash
+make test-labplus-board-device
+```
+
+关键输出：
+
+```text
+board_device_led_reset [OK]
+board_device_tx_idle [OK]
+board_device_sw0 [OK]
+board_device_sw5 [OK]
+board_device_sw_default [OK]
+board_device_write_ready [OK]
+board_device_finish_led [OK]
+board_device_uart_0_data [OK]
+...
+board_device_uart_13_data [OK]
+board_device_tx_returns_idle [OK]
+board device UART/LED directed test passed.
+```
+
+该测试直接实例化 `device #(.SIMULATION(0))`，也就是使用真实上板模式下的 UART ready 行为，而不是仿真快速 ready。测试会触发 `FINISH_ADDR` 写入，检查 `led[3:0]` 全亮，然后按 `BIT_TMR_MAX=10416` 的 bit 周期在 `tx` 线上采样每一帧，确认真实串口波形逐字节输出 `Hello World!\r\n`。测试最初发现了两个上板前问题：`txData` 会在一帧尚未发完时被下一字符覆盖，以及字符串 ROM 中 `World` 的 `W` 写成了小写 `w`；当前均已修复并通过回归。
+
+### 7.19 上板前自动集合回归
 
 运行：
 
@@ -1056,10 +1091,11 @@ Vivado pre-board check passed.
 make test-labplus-preboard
 ```
 
-该入口顺序运行 `test-labplus-vivado-precheck`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio` 和 `test-labplus-xv6smoke`。本次回归全部通过，关键收尾输出包括：
+该入口顺序运行 `test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio` 和 `test-labplus-xv6smoke`。本次回归全部通过，关键收尾输出包括：
 
 ```text
 Vivado pre-board check passed.
+board device UART/LED directed test passed.
 MMU page fault directed tests passed.
 S-mode interrupt pending delegation test passed.
 SFENCE.VMA directed test passed.
@@ -1073,7 +1109,7 @@ xv6 platform smoke test passed.
 
 这个集合不替代 Vivado 综合/实现和真实上板串口输出，但可以在没有板子的情况下快速确认 xv6/pre-board 相关的 Vivado 工程配置、已有 bitstream/report 健康状态、CPU 特权、MMU fault、S 态中断、SFENCE/WFI、CLINT/PLIC/UART/virtio 仿真模型没有被后续改动破坏。
 
-### 7.19 Nexys4 DDR 上板清单
+### 7.20 Nexys4 DDR 上板清单
 
 新增 `docs/nexys4_bringup.md`，用于拿到实体板后直接按步骤检查。当前记录的关键产物为：
 
@@ -1092,7 +1128,7 @@ timing status: constraints met
 
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，并补了独立 page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试和 Vivado 上板前静态检查。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，并补了独立 page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查和 Nexys4 board device UART/LED 定向测试。后续如果继续推进 xv6，需要补充：
 
 - 更高级的 virtio block 多 queue、packed queue、动态配置变更通知和更完整的 config 字段。
 - 更完整的 16550 baud timing 和 receiver line-break timing 等细节。
@@ -1103,7 +1139,7 @@ timing status: constraints met
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试和 Vivado 上板前静态检查。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、CLINT alias directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、xv6 platform smoke test、Vivado pre-board check、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查和 Nexys4 board device UART/LED 定向测试。上板前还修复了板级 UART 自动字符串发送时 `txData` 中途覆盖和 `Hello World` 大小写不一致的问题。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、CLINT alias directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、xv6 platform smoke test、Vivado pre-board check、Nexys4 board device UART/LED test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 
