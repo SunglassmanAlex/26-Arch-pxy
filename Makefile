@@ -27,6 +27,7 @@ no_arguments:
 	@echo "  - test-labplus-preboard: Run Lab+ non-Vivado pre-board regression"
 	@echo "  - vivado-nexys4-bitstream: Rebuild Nexys4 DDR bitstream with Vivado"
 	@echo "  - vivado-nexys4-program: Program Nexys4 DDR bitstream with Vivado Hardware Manager"
+	@echo "  - nexys4-uart-check: Capture Nexys4 UART output, set SERIAL=/dev/ttyUSBx"
 
 init:
 	git submodule update --init --recursive
@@ -222,6 +223,13 @@ vivado-nexys4-program:
 	fi
 	vivado -mode batch -source tools/program_nexys4_bitstream.tcl
 
+nexys4-uart-check:
+	@if [ -z "$(SERIAL)" ]; then \
+		echo "Please set SERIAL=/dev/ttyUSBx or another board UART device"; \
+		exit 2; \
+	fi
+	python3 tools/check_board_uart.py --port "$(SERIAL)" --baud 9600 --expect "Hello World!"
+
 clean:
 	rm -rf build
 
@@ -229,4 +237,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device vivado-nexys4-bitstream vivado-nexys4-program
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check

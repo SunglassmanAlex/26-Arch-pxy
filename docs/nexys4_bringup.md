@@ -34,6 +34,14 @@ make vivado-nexys4-program
 
 默认烧写 `project_1.runs/impl_1/basys3_top.bit`。如需指定文件或硬件目标，可使用 `BITSTREAM=/path/to/file.bit make vivado-nexys4-program` 或 `HW_TARGET='*/xilinx_tcf/Digilent/*' make vivado-nexys4-program`。
 
+烧写并 reset 后，可用串口验收脚本等待预期输出：
+
+```bash
+make nexys4-uart-check SERIAL=/dev/ttyUSB1
+```
+
+该目标会将串口配置为 `9600 8N1` 并等待 `Hello World!`。如果串口号或期望输出不同，可直接运行 `python3 tools/check_board_uart.py --port /dev/ttyUSB1 --expect '...'`。
+
 ## 2. Vivado routed report 状态
 
 `make test-labplus-vivado-precheck` 已检查以下 routed artifacts：
@@ -142,7 +150,7 @@ xv6 platform smoke test passed.
 5. 打开 USB UART 对应串口，设置为 `9600 8N1`。
 6. 按 `BTNC` reset。
 7. 观察 `led[3:0]` 是否在程序 finish 后全部点亮。
-8. 观察串口是否输出 `Hello World!` 或当前测试程序的输出。
+8. 观察串口是否输出 `Hello World!` 或当前测试程序的输出，也可以用 `make nexys4-uart-check SERIAL=/dev/ttyUSB1` 自动等待该输出。
 
 如果没有串口输出，优先检查：
 

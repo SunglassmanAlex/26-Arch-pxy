@@ -17,6 +17,7 @@ PROJECT_DIR = PROJECT.parent
 IMPL_DIR = PROJECT_DIR / "project_1.runs" / "impl_1"
 REBUILD_SCRIPT = REPO_ROOT / "tools" / "rebuild_nexys4_bitstream.tcl"
 PROGRAM_SCRIPT = REPO_ROOT / "tools" / "program_nexys4_bitstream.tcl"
+UART_CHECK_SCRIPT = REPO_ROOT / "tools" / "check_board_uart.py"
 
 EXPECTED_PART = "xc7a100tcsg324-1"
 EXPECTED_TOP = "basys3_top"
@@ -222,6 +223,11 @@ def main() -> int:
         PROGRAM_SCRIPT.exists(),
         "vivado_program_script_exists",
         str(PROGRAM_SCRIPT),
+    )
+    require(
+        UART_CHECK_SCRIPT.exists(),
+        "board_uart_check_script_exists",
+        str(UART_CHECK_SCRIPT),
     )
 
     root = ET.parse(PROJECT).getroot()

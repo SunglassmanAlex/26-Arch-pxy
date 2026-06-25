@@ -44,6 +44,7 @@
   \item 扩展 Vivado/preboard 检查：自动打印当前 \texttt{.bit} 的 path、size、mtime、SHA256、\texttt{.bin} 缺失提示和 timing WNS，提示 \texttt{.bit} 是否旧于 Vivado 输入文件，并固化板级 UART 的 \texttt{Hello World!\textbackslash r\textbackslash n\textbackslash 0} ROM、9600 baud tick、10 bit frame、\texttt{txData} idle guard 和 TX ready gate，便于上板时比对烧写文件并提前发现串口回归。
   \item 新增 Vivado bitstream 重建入口：提供 \texttt{tools/rebuild\_nexys4\_bitstream.tcl} 和 \texttt{make vivado-nexys4-bitstream}，用于在安装 Vivado 的机器上重新跑 \texttt{synth\_1/impl\_1} 并生成最新 Nexys4 DDR \texttt{.bit}。
   \item 新增 Vivado Hardware Manager batch 烧写入口：提供 \texttt{tools/program\_nexys4\_bitstream.tcl} 和 \texttt{make vivado-nexys4-program}，可在连接 Nexys4 DDR 后自动选择 \texttt{xc7a100t} 设备并烧写当前 \texttt{.bit}。
+  \item 新增实体板 UART 验收脚本：提供 \texttt{tools/check\_board\_uart.py} 和 \texttt{make nexys4-uart-check SERIAL=/dev/ttyUSBx}，自动配置 \texttt{9600 8N1} 并等待 \texttt{Hello World!} 输出。
   \item 新增 Nexys4 board device UART/LED 定向测试：直接仿真 \texttt{device \#(.SIMULATION(0))}，覆盖 reset 后 LED/TX idle、开关读数、finish LED、真实 UART bit sampling 和完整 \texttt{Hello World!\textbackslash r\textbackslash n} 输出。
   \item 修复板级 UART 自动字符串发送：避免 \texttt{txData} 在一帧发送过程中被下一字符覆盖，并将串口 ROM 中的小写 \texttt{w} 修正为大写 \texttt{W}，保证真实串口输出和预期一致。
   \item 新增 Nexys4 DDR 上板前 bring-up 清单：记录 bitstream 路径、大小、SHA256、routed report 状态、管脚、串口参数、预期 LED/UART 行为和实体板排查步骤。
@@ -374,8 +375,9 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   \item \texttt{tools/preboard\_check.py}：新增上板前静态检查脚本，使用 XML parser 读取 Vivado \texttt{project\_1.xpr}，验证 Nexys4 DDR part、sources/constrs/sim/IP fileset 中的关键文件存在，检查 \texttt{basys3\_top} 兼容 wrapper 指向 \texttt{nexys4\_top}，检查 \texttt{clk/btnC/sw/led/RsTx/RsRx} 的 Nexys4 DDR XDC 管脚约束，并确认已有 \texttt{basys3\_top.bit}、route status、routed DRC 和 timing summary 报告有效；同时输出 \texttt{.bit} path/size/mtime/SHA256、\texttt{.bin} 缺失提示、timing WNS 和 bitstream freshness warning，并静态检查板级 UART 字符串 ROM、9600 baud tick、frame bit 数、\texttt{txData} idle guard 和 TX ready gate。
   \item \texttt{tools/rebuild\_nexys4\_bitstream.tcl}：新增 Vivado batch 重建脚本，打开 \texttt{project\_1.xpr}，重置并运行 \texttt{synth\_1}，再运行 \texttt{impl\_1 -to\_step write\_bitstream}，检查 run status 和 \texttt{basys3\_top.bit} 是否生成；支持通过 \texttt{VIVADO\_JOBS} 调整并行度。
   \item \texttt{tools/program\_nexys4\_bitstream.tcl}：新增 Vivado Hardware Manager batch 烧写脚本，默认使用 \texttt{project\_1.runs/impl\_1/basys3\_top.bit}，连接硬件服务器后打开目标，优先选择 \texttt{xc7a100t*} 设备并执行 \texttt{program\_hw\_devices}；支持 \texttt{BITSTREAM} 和 \texttt{HW\_TARGET} 环境变量覆盖。
+  \item \texttt{tools/check\_board\_uart.py}：新增实体板 UART 验收脚本，不依赖 pyserial，使用 POSIX \texttt{termios/select} 将串口配置为 \texttt{9600 8N1}，实时输出捕获到的字节并等待指定字符串；默认等待 \texttt{Hello World!}，支持 \texttt{--expect}、\texttt{--baud} 和 \texttt{--timeout}。
   \item \texttt{docs/nexys4\_bringup.md}：新增 Nexys4 DDR 实体板测试前清单，固定当前 \texttt{.bit} 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 \texttt{9600 8N1} 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
-  \item \texttt{Makefile}：新增 \texttt{test-labplus-2}、\texttt{test-labplus-3}、\texttt{test-labplus-4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart}、\texttt{test-labplus-virtio}、\texttt{test-labplus-xv6smoke}、\texttt{test-labplus-vivado-precheck}、\texttt{test-labplus-board-device}、\texttt{test-labplus-preboard}、\texttt{vivado-nexys4-bitstream} 和 \texttt{vivado-nexys4-program}。其中 \texttt{test-labplus-preboard} 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；\texttt{vivado-nexys4-bitstream} 在安装 Vivado 的机器上调用 batch Tcl 重建 \texttt{.bit}；\texttt{vivado-nexys4-program} 调用 Hardware Manager batch Tcl 烧写当前 \texttt{.bit}。
+  \item \texttt{Makefile}：新增 \texttt{test-labplus-2}、\texttt{test-labplus-3}、\texttt{test-labplus-4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart}、\texttt{test-labplus-virtio}、\texttt{test-labplus-xv6smoke}、\texttt{test-labplus-vivado-precheck}、\texttt{test-labplus-board-device}、\texttt{test-labplus-preboard}、\texttt{vivado-nexys4-bitstream}、\texttt{vivado-nexys4-program} 和 \texttt{nexys4-uart-check}。其中 \texttt{test-labplus-preboard} 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；\texttt{vivado-nexys4-bitstream} 在安装 Vivado 的机器上调用 batch Tcl 重建 \texttt{.bit}；\texttt{vivado-nexys4-program} 调用 Hardware Manager batch Tcl 烧写当前 \texttt{.bit}；\texttt{nexys4-uart-check} 用于实体板串口输出验收。
   \item \texttt{ready-to-run/lab+/}：补充官方 Lab+ 测试二进制和汇编反汇编文件。
 \end{itemize}
 
@@ -873,6 +875,7 @@ make test-labplus-vivado-precheck
 vivado_project_exists [OK]
 vivado_rebuild_script_exists [OK]
 vivado_program_script_exists [OK]
+board_uart_check_script_exists [OK]
 vivado_project_part_nexys4 [OK]
 vivado_sources_1_soc_top.sv_listed [OK]
 vivado_sources_1_basys3_top.sv_exists [OK]
@@ -962,6 +965,8 @@ timing status: constraints met
 为了解决当前 \texttt{.bit} 旧于部分 RTL/工程文件的问题，新增 \texttt{make vivado-nexys4-bitstream}。在安装 Vivado 的机器上运行该目标会调用 \texttt{tools/rebuild\_nexys4\_bitstream.tcl} 重新执行 \texttt{synth\_1} 和 \texttt{impl\_1 -to\_step write\_bitstream}。生成新 \texttt{.bit} 后，应再次运行 \texttt{make test-labplus-vivado-precheck}，确认 stale warning 消失或只剩预期的本地时间戳提示。
 
 拿到实体板后，新增 \texttt{make vivado-nexys4-program} 可直接通过 Vivado Hardware Manager batch 模式烧写当前 \texttt{.bit}。如果要指定非默认 bitstream 或硬件目标，可设置 \texttt{BITSTREAM=/path/to/file.bit} 或 \texttt{HW\_TARGET='*/xilinx\_tcf/Digilent/*'}。
+
+烧写并 reset 后，新增 \texttt{make nexys4-uart-check SERIAL=/dev/ttyUSBx} 可自动监听板载 USB UART，默认等待 \texttt{Hello World!}。如果测试程序输出不同，可以直接运行 \texttt{python3 tools/check\_board\_uart.py --port /dev/ttyUSBx --expect '...'}。
 
 \section{后续可做项}
 

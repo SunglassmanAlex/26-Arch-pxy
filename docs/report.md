@@ -36,6 +36,7 @@
 - 扩展 Vivado/preboard 检查：自动打印当前 `.bit` 的 path、size、mtime、SHA256、`.bin` 缺失提示和 timing WNS，提示 `.bit` 是否旧于 Vivado 输入文件，并固化板级 UART 的 `Hello World!\r\n\0` ROM、9600 baud tick、10 bit frame、`txData` idle guard 和 TX ready gate，便于上板时比对烧写文件并提前发现串口回归。
 - 新增 Vivado bitstream 重建入口：提供 `tools/rebuild_nexys4_bitstream.tcl` 和 `make vivado-nexys4-bitstream`，用于在安装 Vivado 的机器上重新跑 `synth_1/impl_1` 并生成最新 Nexys4 DDR `.bit`。
 - 新增 Vivado Hardware Manager batch 烧写入口：提供 `tools/program_nexys4_bitstream.tcl` 和 `make vivado-nexys4-program`，可在连接 Nexys4 DDR 后自动选择 `xc7a100t` 设备并烧写当前 `.bit`。
+- 新增实体板 UART 验收脚本：提供 `tools/check_board_uart.py` 和 `make nexys4-uart-check SERIAL=/dev/ttyUSBx`，自动配置 `9600 8N1` 并等待 `Hello World!` 输出。
 - 新增 Nexys4 board device UART/LED 定向测试：直接仿真 `device #(.SIMULATION(0))`，覆盖 reset 后 LED/TX idle、开关读数、finish LED、真实 UART bit sampling 和完整 `Hello World!\r\n` 输出。
 - 修复板级 UART 自动字符串发送：避免 `txData` 在一帧发送过程中被下一字符覆盖，并将串口 ROM 中的小写 `w` 修正为大写 `W`，保证真实串口输出和预期一致。
 - 新增 Nexys4 DDR 上板前 bring-up 清单：记录 bitstream 路径、大小、SHA256、routed report 状态、管脚、串口参数、预期 LED/UART 行为和实体板排查步骤。
@@ -434,10 +435,12 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   - 新增 Vivado batch 重建脚本，打开 `project_1.xpr`，重置并运行 `synth_1`，再运行 `impl_1 -to_step write_bitstream`，检查 run status 和 `basys3_top.bit` 是否生成；支持通过 `VIVADO_JOBS` 调整并行度。
 - `tools/program_nexys4_bitstream.tcl`
   - 新增 Vivado Hardware Manager batch 烧写脚本，默认使用 `project_1.runs/impl_1/basys3_top.bit`，连接硬件服务器后打开目标，优先选择 `xc7a100t*` 设备并执行 `program_hw_devices`；支持 `BITSTREAM` 和 `HW_TARGET` 环境变量覆盖。
+- `tools/check_board_uart.py`
+  - 新增实体板 UART 验收脚本，不依赖 pyserial，使用 POSIX `termios/select` 将串口配置为 `9600 8N1`，实时输出捕获到的字节并等待指定字符串；默认等待 `Hello World!`，支持 `--expect`、`--baud` 和 `--timeout`。
 - `docs/nexys4_bringup.md`
   - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-preboard`、`vivado-nexys4-bitstream` 和 `vivado-nexys4-program`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -1045,6 +1048,7 @@ make test-labplus-vivado-precheck
 vivado_project_exists [OK]
 vivado_rebuild_script_exists [OK]
 vivado_program_script_exists [OK]
+board_uart_check_script_exists [OK]
 vivado_project_part_nexys4 [OK]
 vivado_sources_1_soc_top.sv_listed [OK]
 vivado_sources_1_basys3_top.sv_exists [OK]
@@ -1148,6 +1152,8 @@ timing status: constraints met
 为了解决当前 `.bit` 旧于部分 RTL/工程文件的问题，新增 `make vivado-nexys4-bitstream`。在安装 Vivado 的机器上运行该目标会调用 `tools/rebuild_nexys4_bitstream.tcl` 重新执行 `synth_1` 和 `impl_1 -to_step write_bitstream`。生成新 `.bit` 后，应再次运行 `make test-labplus-vivado-precheck`，确认 stale warning 消失或只剩预期的本地时间戳提示。
 
 拿到实体板后，新增 `make vivado-nexys4-program` 可直接通过 Vivado Hardware Manager batch 模式烧写当前 `.bit`。如果要指定非默认 bitstream 或硬件目标，可设置 `BITSTREAM=/path/to/file.bit` 或 `HW_TARGET='*/xilinx_tcf/Digilent/*'`。
+
+烧写并 reset 后，新增 `make nexys4-uart-check SERIAL=/dev/ttyUSBx` 可自动监听板载 USB UART，默认等待 `Hello World!`。如果测试程序输出不同，可以直接运行 `python3 tools/check_board_uart.py --port /dev/ttyUSBx --expect '...'`。
 
 ## 8. 后续可做项
 
