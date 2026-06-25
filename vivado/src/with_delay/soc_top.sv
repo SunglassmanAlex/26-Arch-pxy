@@ -158,6 +158,7 @@ module soc_top #(
 	logic cpu_clk;
 	logic clk_wiz_locked;
 	logic soc_reset;
+	localparam int unsigned BOARD_UART_BIT_TMR_MAX = 2603;
 
 	/* mycpu */
 	mycpu_top_single mycpu_top_inst(
@@ -194,8 +195,11 @@ module soc_top #(
 	);
 
 	/* Device */
-	device #(SIMULATION) device_inst (
-		.clk(clk),
+	device #(
+		.SIMULATION(SIMULATION),
+		.BIT_TMR_MAX_VALUE(BOARD_UART_BIT_TMR_MAX)
+	) device_inst (
+		.clk(cpu_clk),
 		.reset(soc_reset),
 		.cpu_clk(cpu_clk),
 		.led(led),

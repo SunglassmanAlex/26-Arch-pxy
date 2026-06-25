@@ -1,7 +1,8 @@
 `include "device.svh"
 
 module device #(
-	parameter logic SIMULATION = 1'b0
+	parameter logic SIMULATION = 1'b0,
+	parameter int unsigned BIT_TMR_MAX_VALUE = 10416
 )(
 	input logic clk, reset,
 	input logic cpu_clk,
@@ -78,7 +79,7 @@ module device #(
 	assign last = ready;
 
 	/* UART */
-	localparam logic [13:0] BIT_TMR_MAX = 14'd10416;
+	localparam logic [13:0] BIT_TMR_MAX = 14'(BIT_TMR_MAX_VALUE);
 	localparam logic [3:0] BIT_INDEX_MAX = 4'd10;
 
 	logic finish;
