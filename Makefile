@@ -22,6 +22,7 @@ no_arguments:
 	@echo "  - test-labplus-uart: Run Lab+ directed UART MMIO test"
 	@echo "  - test-labplus-virtio: Run Lab+ directed simple virtio block test"
 	@echo "  - test-labplus-xv6smoke: Run Lab+ xv6 platform MMIO smoke test"
+	@echo "  - test-labplus-vivado-precheck: Run Lab+ Vivado project static pre-board check"
 	@echo "  - test-labplus-preboard: Run Lab+ non-Vivado pre-board regression"
 
 init:
@@ -180,7 +181,11 @@ test-labplus-xv6smoke:
 	  vsrc/test/ram_dpi_stubs.cpp
 	./build/xv6-platform-smoke/xv6_platform_smoke_tb
 
+test-labplus-vivado-precheck:
+	python3 tools/preboard_check.py
+
 test-labplus-preboard:
+	$(MAKE) test-labplus-vivado-precheck
 	$(MAKE) test-labplus-pagefault
 	$(MAKE) test-labplus-sinterrupt
 	$(MAKE) test-labplus-sfence
@@ -198,4 +203,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck
