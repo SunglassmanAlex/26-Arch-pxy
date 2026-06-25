@@ -66,6 +66,10 @@ IMPLEMENTATION_ARTIFACTS = {
     "timing_summary": IMPL_DIR / "basys3_top_timing_summary_routed.rpt",
 }
 
+EXPECTED_UART_STRING = b"Hello World!\r\n\0"
+EXPECTED_UART_BAUD_TICKS = 10416
+EXPECTED_UART_FRAME_BITS = 10
+
 
 def ok(name: str) -> None:
     print(f"{name} [OK]")
@@ -128,6 +132,51 @@ def parse_timing_wns(timing_text: str) -> float | None:
     return None
 
 
+def parse_sv_int(expr: str) -> int | None:
+    clean = expr.strip().replace("_", "")
+    if re.fullmatch(r"\d+", clean):
+        return int(clean, 10)
+
+    match = re.fullmatch(r"(?:\d+)?'([dDhHbBoO])([0-9a-fA-F]+)", clean)
+    if match is None:
+        return None
+
+    base_name = match.group(1).lower()
+    base = {"d": 10, "h": 16, "b": 2, "o": 8}[base_name]
+    return int(match.group(2), base)
+
+
+def extract_sv_localparam_int(text: str, name: str) -> int | None:
+    pattern = rf"\blocalparam\b[^;=]*\b{re.escape(name)}\b\s*=\s*([^;]+);"
+    match = re.search(pattern, text)
+    if match is None:
+        return None
+    return parse_sv_int(match.group(1))
+
+
+def strip_sv_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"//.*", "", text)
+
+
+def extract_uart_string_bytes(device_text: str) -> bytes | None:
+    match = re.search(
+        r"\blocalparam\s+logic\s+.*?\bSTR\b\s*=\s*\{(?P<body>.*?)\}\s*;",
+        device_text,
+        flags=re.S,
+    )
+    if match is None:
+        return None
+
+    values = []
+    for literal in re.findall(r"8'h([0-9a-fA-F]+)", match.group("body")):
+        value = int(literal, 16)
+        if value > 0xFF:
+            return None
+        values.append(value)
+    return bytes(values)
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as file:
@@ -182,6 +231,50 @@ def main() -> int:
         and "nexys4_top u_nexys4_top" in top_text,
         "vivado_basys3_compat_wrapper",
         "missing basys3_top wrapper around nexys4_top",
+    )
+
+    device_file = REPO_ROOT / "vivado" / "src" / "device.sv"
+    device_text = device_file.read_text(encoding="utf-8")
+    require(
+        extract_sv_localparam_int(device_text, "STR_LEN") == len(EXPECTED_UART_STRING),
+        "board_device_uart_string_len",
+        f"expected {len(EXPECTED_UART_STRING)} bytes including NUL",
+    )
+    require(
+        extract_uart_string_bytes(device_text) == EXPECTED_UART_STRING,
+        "board_device_uart_string_rom",
+        "expected Hello World!\\r\\n\\0",
+    )
+    require(
+        extract_sv_localparam_int(device_text, "BIT_TMR_MAX")
+        == EXPECTED_UART_BAUD_TICKS,
+        "board_device_uart_baud_ticks",
+        f"expected {EXPECTED_UART_BAUD_TICKS} for 100 MHz / 9600 baud",
+    )
+    require(
+        extract_sv_localparam_int(device_text, "BIT_INDEX_MAX")
+        == EXPECTED_UART_FRAME_BITS,
+        "board_device_uart_frame_bits",
+        "expected start + 8 data + stop bits",
+    )
+    device_no_comments = strip_sv_comments(device_text)
+    require(
+        re.search(
+            r"else\s+if\s*\(\s*txState\s*==\s*RDY\s*&&\s*send\s*&&\s*putchar\s*\)\s*txData\s*<=",
+            device_no_comments,
+        )
+        is not None,
+        "board_device_uart_txdata_idle_guard",
+        "txData must only load when UART is idle",
+    )
+    require(
+        re.search(
+            r"assign\s+ready\s*=\s*tx_access\s*\?\s*tx_ready\s*:\s*1'b1\s*;",
+            device_no_comments,
+        )
+        is not None,
+        "board_device_uart_ready_gate",
+        "board mode TX_DATA writes must wait for tx_ready",
     )
 
     xdc_file = (REPO_ROOT / "vivado" / "src" / "Basys-3-Master.xdc")

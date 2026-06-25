@@ -23,6 +23,9 @@
 - `basys3_top.bit` 存在且大小大于 1 MiB。
 - 脚本输出当前 `.bit` 的 path、size、mtime 和 SHA256，便于和实体板烧写文件比对。
 - 脚本提示当前 implementation 目录没有 `.bin`，需要用 `.bit` program device 或重新生成 flash image。
+- `device.sv` 中的板级 UART 字符串 ROM 固定为 `Hello World!\r\n\0`。
+- `device.sv` 中的板级 UART baud tick 固定为 `BIT_TMR_MAX = 10416`，frame 长度固定为 start + 8 data + stop。
+- `device.sv` 中的 `txData` 只在 UART idle 时装载，`TX_DATA` 写入 ready 由 `tx_ready` gate，避免上板串口一帧中途被新字符覆盖。
 - `basys3_top_route_status.rpt` 显示 routing errors 为 0。
 - `basys3_top_drc_routed.rpt` 显示 `Violations found: 0`。
 - `basys3_top_timing_summary_routed.rpt` 显示 WNS 非负，当前解析到并输出的 WNS 为 `0.574 ns`。
