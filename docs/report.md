@@ -29,7 +29,7 @@
 - 新增仿真侧 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器、`ConfigGeneration` 和 virtio-blk config 字段，提供包含 `SIZE_MAX/SEG_MAX/BLK_SIZE/FLUSH/DISCARD/WRITE_ZEROES` 的 feature negotiation，提供同步 512B sector 读写扩展，支持 `Status=0` reset、单 queue 的 descriptor/avail/used ring、非 0 `QueueSel` guard、indirect descriptor、一次 `QueueNotify` drain 多个 pending avail entry、event idx 中断抑制/触发、`VIRTIO_BLK_T_FLUSH` status-only 请求、`VIRTIO_BLK_T_DISCARD` no-op 成功请求和 `VIRTIO_BLK_T_WRITE_ZEROES` 清零请求，以及 xv6 风格不协商 event idx 时的普通 avail flags 中断控制，并支持 `+simple_blk_image=...` 从二进制镜像初始化 disk。
 - 新增仿真侧 CLINT 地址兼容：`SimMemoryWithVirtio` 将 QEMU/xv6 `0x0200...` 的 `msip/mtimecmp/mtime` 地址映射到课程框架 `0x3800...` 地址。
 - 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1、UART 事件接到 PLIC source 10。
-- 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、LSR overrun/parity/framing/break 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
+- 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、LSR overrun/parity/framing/break、break-only line-status 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
 - 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
@@ -264,10 +264,10 @@ simple virtio block 命令完成时会置位 PLIC source 1 pending，因此软�
 - offset 1：`IER/DLM`。`LCR.DLAB=1` 时访问 DLM；否则访问 IER，支持 RX data available、THRE、receiver line status 和 modem status 四类中断使能。
 - offset 2：`IIR/FCR`。无 UART 中断 pending 时读 IIR 返回 `0x01`；当 THR empty 且 `IER.THRE=1` 时返回 `0x02`，读出该状态后清除 THRE pending；当 `IER.RX=1` 且 RX FIFO 深度达到 FCR trigger 时返回 `0x04`，表示 received data available；当 RX FIFO 非空但低于 trigger 且持续空闲到 timeout 时返回 `0x0c`，读 RBR 或清 FIFO 后清除；当 `IER.RLS=1` 且发生 overrun/parity/framing/break 任一线状态错误时返回 `0x06`；当 `IER.MS=1` 且 MSR delta sticky 位非零时返回最低优先级 modem status interrupt `0x00`。写 FCR 会保存 bit7:6 的 RX trigger，并支持 bit1 清空 RX FIFO。
 - offset 3/4/7：`LCR/MCR/SCR` 可读写。
-- offset 5：`LSR` 固定保持 `THR empty/transmitter empty=1`，并根据 RX FIFO 非空状态动态维护 bit0 `RX_READY`；RX FIFO 满后若 host 继续送字符，会设置 bit1 `OE` 和 bit7 `FIFO error`；host 送入带错误标记的字符会设置 bit2 `PE`、bit3 `FE`、bit4 `BI` 和 bit7 `FIFO error`，读 LSR 后清除 sticky line-status 错误。
+- offset 5：`LSR` 固定保持 `THR empty/transmitter empty=1`，并根据 RX FIFO 非空状态动态维护 bit0 `RX_READY`；RX FIFO 满后若 host 继续送字符，会设置 bit1 `OE` 和 bit7 `FIFO error`；host 送入带错误标记的字符会设置 bit2 `PE`、bit3 `FE`、bit4 `BI` 和 bit7 `FIFO error`；若 host 在 `io_uart_in_ch=8'hff` 时只给出 break 标记，则只设置 `BI/FIFO error` 而不向 RBR 入队，读 LSR 后清除 sticky line-status 错误。
 - offset 6：`MSR` 支持 loopback 下的最小 modem status 模型。`MCR[4]` 打开时将 `RTS/DTR/OUT1/OUT2` 映射到 `CTS/DSR/RI/DCD`，高 4 位返回当前 modem 输入线，低 4 位返回 sticky delta，读 MSR 后清除 delta。
 
-`SimTop` 不再把 difftest UART 端口固定为 0，而是将 `SimMemoryWithVirtio` 的 TX 输出连接到 `io_uart_out_valid/io_uart_out_ch`。RX 侧将 `io_uart_in_ch=8'hff` 视为无字符，其它值会进入 16 字节 RX FIFO；当达到 FCR trigger 且 `IER.RX=1`、RX FIFO 非空且 timeout、THR empty 且 `IER.THRE=1`、line status 错误且 `IER.RLS=1`，或 modem status delta 且 `IER.MS=1` 时，置位 PLIC source 10 pending，软件可以通过 PLIC claim/complete 接收 UART 外部中断。FIFO 满时 `io_uart_in_valid=0`，向 host 侧反压输入。
+`SimTop` 不再把 difftest UART 端口固定为 0，而是将 `SimMemoryWithVirtio` 的 TX 输出连接到 `io_uart_out_valid/io_uart_out_ch`。RX 侧将 `io_uart_in_ch=8'hff` 视为无字符，其它值会进入 16 字节 RX FIFO；当 `io_uart_in_error[2]` 与无字符同时出现时按 break-only 线状态错误处理，不额外产生 RBR 字节。当达到 FCR trigger 且 `IER.RX=1`、RX FIFO 非空且 timeout、THR empty 且 `IER.THRE=1`、line status 错误且 `IER.RLS=1`，或 modem status delta 且 `IER.MS=1` 时，置位 PLIC source 10 pending，软件可以通过 PLIC claim/complete 接收 UART 外部中断。FIFO 满时 `io_uart_in_valid=0`，向 host 侧反压输入。
 
 ## 5. 前端性能优化
 
@@ -398,13 +398,13 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/util/SimMemoryWithVirtio.sv`
   - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO；将 QEMU/xv6 `0x0200...` CLINT 地址映射到课程框架 `0x3800...` 地址；支持 virtio-blk config 读字段、`ConfigGeneration`、包含 `SIZE_MAX/SEG_MAX/BLK_SIZE/FLUSH/DISCARD/WRITE_ZEROES` 的 feature negotiation、`Status=0` reset、单 queue 的 descriptor/avail/used ring、非 0 `QueueSel` guard、indirect descriptor、一次 `QueueNotify` drain 多个 pending avail entry、event idx block read/write 子集、`VIRTIO_BLK_T_FLUSH` status-only 请求、`VIRTIO_BLK_T_DISCARD` no-op 成功请求和 `VIRTIO_BLK_T_WRITE_ZEROES` 清零请求，并支持 `+simple_blk_image=...` 从二进制镜像初始化 simple-block disk。
   - 新增 PLIC MMIO 模型，拦截 `0x0c000000` 到 `0x0fffffff`，支持 source priority、pending、M/S enable、threshold、claim/complete。
-  - 新增 `0x10000000` 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、FCR trigger/clear、MCR loopback、SCR、LSR overrun/parity/framing/break、MSR modem-status delta、THR TX 输出、THRE interrupt、RX FIFO timeout、16B RBR RX FIFO 和 RX/THRE/RLS/MS interrupt 到 PLIC source 10。
+  - 新增 `0x10000000` 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、FCR trigger/clear、MCR loopback、SCR、LSR overrun/parity/framing/break、break-only line-status、MSR modem-status delta、THR TX 输出、THRE interrupt、RX FIFO timeout、16B RBR RX FIFO 和 RX/THRE/RLS/MS interrupt 到 PLIC source 10。
 - `vsrc/SimTop.sv`
   - 将仿真 UART TX/RX 端口接到 difftest 顶层 `io_uart_out_valid/io_uart_out_ch/io_uart_in_*`。
 - `vsrc/test/plic_mmio_tb.sv`
   - 新增 PLIC MMIO 定向测试，覆盖 priority、pending、M/S enable、M/S threshold、claim/complete、virtio source 1 中断注入，以及 virtio/UART 多源同时 pending 时的高优先级 claim 和同优先级低 source id 优先仲裁。
 - `vsrc/test/uart_mmio_tb.sv`
-  - 新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、parity/framing/break line-status interrupt、modem-status loopback interrupt、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
+  - 新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、parity/framing/break line-status interrupt、break-only 不入队、modem-status loopback interrupt、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
 - `vsrc/test/clint_alias_tb.sv`
   - 新增 CLINT 地址别名定向测试，验证 legacy/QEMU 地址共享 `msip/mtimecmp/mtime` 状态，并覆盖 `swint/trint` 产生和清除。
 - `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
@@ -756,6 +756,15 @@ uart_iir_line_errors_cleared [OK]
 plic_uart_line_errors_claim [OK]
 plic_uart_line_errors_claim_clears_exint [OK]
 plic_uart_line_errors_complete [OK]
+uart_break_only_inject [OK]
+uart_iir_break_only_priority [OK]
+uart_lsr_break_only_no_rx [OK]
+uart_lsr_break_only_cleared [OK]
+uart_rbr_break_only_empty [OK]
+uart_iir_break_only_cleared [OK]
+plic_uart_break_only_claim [OK]
+plic_uart_break_only_claim_clears_exint [OK]
+plic_uart_break_only_complete [OK]
 uart_ier_enable_modem [OK]
 uart_msr_reset [OK]
 uart_mcr_loopback_set_lines [OK]
@@ -794,7 +803,7 @@ plic_uart_timeout_complete [OK]
 UART MMIO directed tests passed.
 ```
 
-该测试直接实例化 `SimMemoryWithVirtio`，用 8-bit CBus 访问模拟 xv6 的 UART 初始化流程：先设置 `LCR.DLAB` 写 DLL/DLM，再恢复 8N1、写 IER/MCR/SCR，写 THR 并检查 `uart_out_valid/ch` 输出字符 `A`。随后配置 PLIC source 10，注入 RX 字符 `B`，验证 `LSR.RX_READY`、`IIR=0x04`、PLIC pending/exint、读 RBR 清 RX-ready，以及 PLIC claim/complete。最后覆盖 16B FIFO 顺序读出、FCR trigger=4 时前三个字符不触发中断/第四个字符触发、FCR bit1 清 RX FIFO、满 FIFO 反压输入、强制 overrun 后 IIR line-status 优先级、LSR sticky overrun 读后清除；再注入 parity/framing/break，验证 LSR PE/FE/BI/FIFO-error 位、IIR line-status 优先级和 PLIC claim/complete；打开 `MCR.loopback` 验证 MSR 当前线状态、delta 读后清除、IIR modem status `0x00` 和 PLIC claim/complete；启用 THRE 后 IIR `0x02` 和 THR 写入后的再次 THRE interrupt，以及低于 trigger 的 RX FIFO timeout `IIR=0x0c`。
+该测试直接实例化 `SimMemoryWithVirtio`，用 8-bit CBus 访问模拟 xv6 的 UART 初始化流程：先设置 `LCR.DLAB` 写 DLL/DLM，再恢复 8N1、写 IER/MCR/SCR，写 THR 并检查 `uart_out_valid/ch` 输出字符 `A`。随后配置 PLIC source 10，注入 RX 字符 `B`，验证 `LSR.RX_READY`、`IIR=0x04`、PLIC pending/exint、读 RBR 清 RX-ready，以及 PLIC claim/complete。最后覆盖 16B FIFO 顺序读出、FCR trigger=4 时前三个字符不触发中断/第四个字符触发、FCR bit1 清 RX FIFO、满 FIFO 反压输入、强制 overrun 后 IIR line-status 优先级、LSR sticky overrun 读后清除；再注入 parity/framing/break，验证 LSR PE/FE/BI/FIFO-error 位、IIR line-status 优先级和 PLIC claim/complete；随后用 `io_uart_in_ch=8'hff` 搭配 break 标记验证 break-only 不入 RBR、LSR 只呈现 BI/FIFO-error 且仍能触发 PLIC claim；打开 `MCR.loopback` 验证 MSR 当前线状态、delta 读后清除、IIR modem status `0x00` 和 PLIC claim/complete；启用 THRE 后 IIR `0x02` 和 THR 写入后的再次 THRE interrupt，以及低于 trigger 的 RX FIFO timeout `IIR=0x0c`。
 
 ### 7.14 Simple virtio block MMIO 定向测试
 
@@ -969,7 +978,7 @@ CLINT alias directed tests passed.
 
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/modem-status 模型，并补了独立 page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART 和 simple-block/virtqueue 定向测试。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，并补了独立 page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART 和 simple-block/virtqueue 定向测试。后续如果继续推进 xv6，需要补充：
 
 - 更高级的 virtio block 多 queue、packed queue、动态配置变更通知和更完整的 config 字段。
 - 更完整的 16550 baud timing 和 receiver line-break timing 等细节。
@@ -980,7 +989,7 @@ CLINT alias directed tests passed.
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART 和 simple-block/virtqueue 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、CLINT alias directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART 和 simple-block/virtqueue 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、CLINT alias directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 ## 10. AI 使用说明
 

@@ -219,6 +219,17 @@ module uart_mmio_tb
         $display("%s [OK]", name);
     endtask
 
+    task automatic inject_break_only(input string name);
+        uart_in_ch = 8'hff;
+        uart_in_error = 3'b100;
+        @(posedge clk);
+        #1;
+        uart_in_error = 3'b000;
+        @(posedge clk);
+        #1;
+        $display("%s [OK]", name);
+    endtask
+
     task automatic force_rx(input u8 data, input string name);
         uart_in_ch = data;
         uart_in_error = 3'b000;
@@ -329,6 +340,16 @@ module uart_mmio_tb
         expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_line_errors_claim");
         expect_exint(1'b0, "plic_uart_line_errors_claim_clears_exint");
         write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_line_errors_complete");
+
+        inject_break_only("uart_break_only_inject");
+        expect8(UART_IIR_FCR, 8'h06, "uart_iir_break_only_priority");
+        expect8(UART_LSR, 8'hf0, "uart_lsr_break_only_no_rx");
+        expect8(UART_LSR, 8'h60, "uart_lsr_break_only_cleared");
+        expect8(UART_RBR_THR_DLL, 8'h00, "uart_rbr_break_only_empty");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_break_only_cleared");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_break_only_claim");
+        expect_exint(1'b0, "plic_uart_break_only_claim_clears_exint");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_break_only_complete");
 
         write8(UART_IER_DLM, 8'h08, 1'b0, 8'd0, "uart_ier_enable_modem");
         expect8(UART_MSR, 8'h00, "uart_msr_reset");

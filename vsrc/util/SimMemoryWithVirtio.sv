@@ -107,6 +107,7 @@ module SimMemoryWithVirtio
     logic [UART_RX_TIMEOUT_BITS-1:0] uart_rx_timeout_count;
     logic uart_rx_valid, uart_rx_full;
     logic uart_rx_pop_req, uart_rx_pop_valid, uart_rx_push_req, uart_rx_overrun_req;
+    logic uart_break_only_req;
     logic uart_lsr_overrun, uart_lsr_parity, uart_lsr_framing, uart_lsr_break;
     logic uart_lsr_line_error, uart_lsr_read_req, uart_iir_read_req, uart_msr_read_req;
     logic [3:0] uart_msr_delta;
@@ -130,6 +131,7 @@ module SimMemoryWithVirtio
     assign uart_in_valid = !uart_rx_full;
     assign uart_rx_push_req = (uart_in_ch != 8'hff) && (!uart_rx_full || uart_rx_pop_valid);
     assign uart_rx_overrun_req = (uart_in_ch != 8'hff) && uart_rx_full && !uart_rx_pop_valid;
+    assign uart_break_only_req = (uart_in_ch == 8'hff) && uart_in_error[2];
     assign uart_lsr_line_error =
         uart_lsr_overrun || uart_lsr_parity || uart_lsr_framing || uart_lsr_break;
 
@@ -1357,6 +1359,12 @@ module SimMemoryWithVirtio
                     plic_pending[PLIC_UART_SOURCE] <= 1'b1;
                 end
                 if (uart_rx_irq_next_active) begin
+                    plic_pending[PLIC_UART_SOURCE] <= 1'b1;
+                end
+            end
+            if (uart_break_only_req) begin
+                uart_lsr_break <= 1'b1;
+                if (uart_ier[2]) begin
                     plic_pending[PLIC_UART_SOURCE] <= 1'b1;
                 end
             end
