@@ -47,10 +47,12 @@ module SimMemoryWithVirtio
     localparam u32 VIRTIO_BLK_FEATURE_SIZE_MAX = 32'h0000_0002;
     localparam u32 VIRTIO_BLK_FEATURE_SEG_MAX = 32'h0000_0004;
     localparam u32 VIRTIO_BLK_FEATURE_BLK_SIZE = 32'h0000_0040;
+    localparam u32 VIRTIO_BLK_FEATURE_FLUSH = 32'h0000_0200;
     localparam u32 VIRTIO_FEATURE_RING_INDIRECT = 32'h1000_0000;
     localparam u32 VIRTIO_FEATURE_RING_EVENT_IDX = 32'h2000_0000;
     localparam u32 VIRTIO_BLK_FEATURES_SEL0 =
-        VIRTIO_BLK_FEATURE_SIZE_MAX | VIRTIO_BLK_FEATURE_SEG_MAX | VIRTIO_BLK_FEATURE_BLK_SIZE;
+        VIRTIO_BLK_FEATURE_SIZE_MAX | VIRTIO_BLK_FEATURE_SEG_MAX |
+        VIRTIO_BLK_FEATURE_BLK_SIZE | VIRTIO_BLK_FEATURE_FLUSH;
     localparam u32 VIRTIO_FEATURES_SEL0 =
         VIRTIO_BLK_FEATURES_SEL0 | VIRTIO_FEATURE_RING_INDIRECT | VIRTIO_FEATURE_RING_EVENT_IDX;
     localparam u32 VIRTIO_FEATURES_SEL1 = 32'h0000_0001;
@@ -58,6 +60,7 @@ module SimMemoryWithVirtio
     localparam u32 VIRTIO_STATUS_FEATURES_OK = 32'h0000_0008;
     localparam u32 VIRTIO_BLK_T_IN = 32'd0;
     localparam u32 VIRTIO_BLK_T_OUT = 32'd1;
+    localparam u32 VIRTIO_BLK_T_FLUSH = 32'd4;
     localparam u8 VIRTIO_BLK_S_OK = 8'd0;
     localparam u8 VIRTIO_BLK_S_IOERR = 8'd1;
     localparam u8 VIRTIO_BLK_S_UNSUPP = 8'd2;
@@ -718,6 +721,7 @@ module SimMemoryWithVirtio
         int disk_base_word;
         word_t write_word;
         logic status_desc_valid;
+        addr_t status_desc_addr;
         begin
             completed = 1'b0;
             if (head >= u16'(virt_queue_num[15:0])) begin
@@ -731,7 +735,7 @@ module SimMemoryWithVirtio
                 desc_table_base = desc0_addr;
                 indirect_len = desc0_len;
                 desc_table_entries = u16'(indirect_len >> 4);
-                if ((indirect_len < 32'd48) || (indirect_len[3:0] != 4'd0)) begin
+                if ((indirect_len < 32'd32) || (indirect_len[3:0] != 4'd0)) begin
                     desc_table_entries = 16'd0;
                 end
                 else begin
@@ -749,7 +753,8 @@ module SimMemoryWithVirtio
                 desc1_flags = 16'd0;
                 desc1_next = 16'd0;
             end
-            if (desc1_next < desc_table_entries) begin
+            if (((desc1_flags & VIRTQ_DESC_F_NEXT) == VIRTQ_DESC_F_NEXT) &&
+                (desc1_next < desc_table_entries)) begin
                 read_virtq_desc_from(desc_table_base, desc1_next,
                     desc2_addr, desc2_len, desc2_flags, desc2_next);
             end
@@ -765,8 +770,21 @@ module SimMemoryWithVirtio
             used_len = 32'd1;
             status_desc_valid = (desc2_len >= 32'd1) &&
                 ((desc2_flags & VIRTQ_DESC_F_WRITE) == VIRTQ_DESC_F_WRITE);
+            status_desc_addr = desc2_addr;
 
-            if (((desc0_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
+            if (req_type == VIRTIO_BLK_T_FLUSH) begin
+                status_desc_valid = (desc1_len >= 32'd1) &&
+                    ((desc1_flags & VIRTQ_DESC_F_WRITE) == VIRTQ_DESC_F_WRITE);
+                status_desc_addr = desc1_addr;
+                if (((desc0_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
+                    (desc0_len < 32'd16) || !status_desc_valid) begin
+                    status = VIRTIO_BLK_S_IOERR;
+                end
+                else begin
+                    status = VIRTIO_BLK_S_OK;
+                end
+            end
+            else if (((desc0_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
                 ((desc1_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
                 (desc0_len < 32'd16) || (desc1_len < 32'd512) || (desc2_len < 32'd1) ||
                 !status_desc_valid ||
@@ -813,7 +831,7 @@ module SimMemoryWithVirtio
             end
 
             if (status_desc_valid) begin
-                ram_write_byte_addr(desc2_addr, status);
+                ram_write_byte_addr(status_desc_addr, status);
             end
             blk_status <= {56'd0, status};
             complete_virtqueue_request(head, used_len);

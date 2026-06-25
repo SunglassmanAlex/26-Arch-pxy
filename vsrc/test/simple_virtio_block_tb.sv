@@ -28,10 +28,12 @@ module simple_virtio_block_tb
     localparam u32 VIRTIO_FEATURE_BLK_SIZE_MAX = 32'h0000_0002;
     localparam u32 VIRTIO_FEATURE_BLK_SEG_MAX = 32'h0000_0004;
     localparam u32 VIRTIO_FEATURE_BLK_SIZE = 32'h0000_0040;
+    localparam u32 VIRTIO_FEATURE_BLK_FLUSH = 32'h0000_0200;
     localparam u32 VIRTIO_FEATURE_INDIRECT = 32'h1000_0000;
     localparam u32 VIRTIO_FEATURE_EVENT_IDX = 32'h2000_0000;
     localparam u32 VIRTIO_FEATURE_BLK =
-        VIRTIO_FEATURE_BLK_SIZE_MAX | VIRTIO_FEATURE_BLK_SEG_MAX | VIRTIO_FEATURE_BLK_SIZE;
+        VIRTIO_FEATURE_BLK_SIZE_MAX | VIRTIO_FEATURE_BLK_SEG_MAX |
+        VIRTIO_FEATURE_BLK_SIZE | VIRTIO_FEATURE_BLK_FLUSH;
     localparam u32 VIRTIO_FEATURE_SEL0 =
         VIRTIO_FEATURE_BLK | VIRTIO_FEATURE_INDIRECT | VIRTIO_FEATURE_EVENT_IDX;
     localparam u32 VIRTIO_FEATURE_VERSION_1 = 32'h0000_0001;
@@ -718,6 +720,23 @@ module simple_virtio_block_tb
         cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
         expect_read32(VIRTIO_BASE + 64'h060, 32'd0, "virtio_xv6_interrupt_ack");
         expect_read32(PLIC_PENDING, 32'd0, "virtio_xv6_interrupt_ack_plic_clear");
+
+        write_blk_request_at(VQ_REQ2_ADDR, 32'd4, 64'd0);
+        ram_write_byte(VQ_STATUS2_ADDR, 8'hff);
+        write_desc(3, VQ_REQ2_ADDR, 32'd16, VIRTQ_DESC_F_NEXT, 16'd4);
+        write_desc(4, VQ_STATUS2_ADDR, 32'd1, VIRTQ_DESC_F_WRITE, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd8, 16'd3);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd3);
+        cbus_write32(VIRTIO_BASE + 64'h050, 32'd0);
+        expect_ram_byte(VQ_STATUS2_ADDR, 8'd0, "virtio_xv6_flush_status");
+        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd3, "virtio_xv6_flush_used_idx");
+        expect_ram_u32(VQ_USED_ADDR + 64'd20, 32'd3, "virtio_xv6_flush_used_id");
+        expect_ram_u32(VQ_USED_ADDR + 64'd24, 32'd1, "virtio_xv6_flush_used_len");
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd1, "virtio_xv6_flush_interrupt_status");
+        expect_read32(PLIC_PENDING, 32'(1 << VIRTIO_IRQ), "virtio_xv6_flush_plic_pending");
+        cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd0, "virtio_xv6_flush_interrupt_ack");
+        expect_read32(PLIC_PENDING, 32'd0, "virtio_xv6_flush_plic_clear");
 
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(DMA_ADDR + 64'(word_idx * 8), pattern(word_idx));
