@@ -158,6 +158,10 @@ module soc_top #(
 	logic cpu_clk;
 	logic clk_wiz_locked;
 	logic soc_reset;
+	logic [3:0] device_led;
+	logic bus_seen;
+	logic uart_seen;
+	logic finish_seen;
 	localparam int unsigned BOARD_UART_BIT_TMR_MAX = 2603;
 
 	/* mycpu */
@@ -202,7 +206,7 @@ module soc_top #(
 		.clk(cpu_clk),
 		.reset(soc_reset),
 		.cpu_clk(cpu_clk),
-		.led(led),
+		.led(device_led),
 		.sw(sw),
 		.tx(tx),
 		.valid(device_valid),
@@ -228,6 +232,20 @@ module soc_top #(
 	end
 
 	assign soc_reset = reset | ~clk_wiz_locked;
+
+	always_ff @(posedge cpu_clk) begin
+		if (soc_reset) begin
+			bus_seen <= 1'b0;
+			uart_seen <= 1'b0;
+			finish_seen <= 1'b0;
+		end else begin
+			bus_seen <= bus_seen | valid;
+			uart_seen <= uart_seen | (device_valid && device_wvalid && device_addr == 64'h4060_0004);
+			finish_seen <= finish_seen | (device_valid && device_wvalid && device_addr == 64'h2333_3000);
+		end
+	end
+
+	assign led = sw[3] ? {finish_seen | uart_seen, bus_seen, ~soc_reset, clk_wiz_locked} : device_led;
 	
 
 endmodule

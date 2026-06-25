@@ -70,7 +70,8 @@ IMPLEMENTATION_ARTIFACTS = {
 }
 
 EXPECTED_UART_STRING = b"Hello World!\r\n\0"
-EXPECTED_UART_BAUD_TICKS = 10416
+EXPECTED_UART_DEFAULT_BAUD_TICKS = 10416
+EXPECTED_BOARD_UART_BAUD_TICKS = 2603
 EXPECTED_UART_FRAME_BITS = 10
 
 
@@ -155,6 +156,14 @@ def parse_sv_int(expr: str) -> int | None:
 
 def extract_sv_localparam_int(text: str, name: str) -> int | None:
     pattern = rf"\blocalparam\b[^;=]*\b{re.escape(name)}\b\s*=\s*([^;]+);"
+    match = re.search(pattern, text)
+    if match is None:
+        return None
+    return parse_sv_int(match.group(1))
+
+
+def extract_sv_param_int(text: str, name: str) -> int | None:
+    pattern = rf"\b(?:localparam|parameter)\b[^;=]*\b{re.escape(name)}\b\s*=\s*([^,;)]+)\s*[,;)]"
     match = re.search(pattern, text)
     if match is None:
         return None
@@ -290,10 +299,10 @@ def main() -> int:
         "expected Hello World!\\r\\n\\0",
     )
     require(
-        extract_sv_localparam_int(device_text, "BIT_TMR_MAX")
-        == EXPECTED_UART_BAUD_TICKS,
-        "board_device_uart_baud_ticks",
-        f"expected {EXPECTED_UART_BAUD_TICKS} for 100 MHz / 9600 baud",
+        extract_sv_param_int(device_text, "BIT_TMR_MAX_VALUE")
+        == EXPECTED_UART_DEFAULT_BAUD_TICKS,
+        "board_device_uart_default_baud_ticks",
+        f"expected default {EXPECTED_UART_DEFAULT_BAUD_TICKS} for 100 MHz / 9600 baud tests",
     )
     require(
         extract_sv_localparam_int(device_text, "BIT_INDEX_MAX")
@@ -319,6 +328,20 @@ def main() -> int:
         is not None,
         "board_device_uart_ready_gate",
         "board mode TX_DATA writes must wait for tx_ready",
+    )
+
+    soc_file = REPO_ROOT / "vivado" / "src" / "with_delay" / "soc_top.sv"
+    soc_text = soc_file.read_text(encoding="utf-8")
+    require(
+        extract_sv_localparam_int(soc_text, "BOARD_UART_BIT_TMR_MAX")
+        == EXPECTED_BOARD_UART_BAUD_TICKS,
+        "board_soc_uart_baud_ticks",
+        f"expected {EXPECTED_BOARD_UART_BAUD_TICKS} for 25 MHz / 9600 baud on Nexys4",
+    )
+    require(
+        ".BIT_TMR_MAX_VALUE(BOARD_UART_BIT_TMR_MAX)" in strip_sv_comments(soc_text),
+        "board_soc_uart_baud_override",
+        "soc_top must override device UART divisor for the 25 MHz CPU clock",
     )
 
     xdc_file = (REPO_ROOT / "vivado" / "src" / "Basys-3-Master.xdc")
