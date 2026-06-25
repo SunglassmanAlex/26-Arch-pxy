@@ -21,9 +21,11 @@
 `make test-labplus-vivado-precheck` 已检查以下 routed artifacts：
 
 - `basys3_top.bit` 存在且大小大于 1 MiB。
+- 脚本输出当前 `.bit` 的 path、size、mtime 和 SHA256，便于和实体板烧写文件比对。
+- 脚本提示当前 implementation 目录没有 `.bin`，需要用 `.bit` program device 或重新生成 flash image。
 - `basys3_top_route_status.rpt` 显示 routing errors 为 0。
 - `basys3_top_drc_routed.rpt` 显示 `Violations found: 0`。
-- `basys3_top_timing_summary_routed.rpt` 显示 WNS 非负，当前解析到的 WNS 为 `0.574 ns`。
+- `basys3_top_timing_summary_routed.rpt` 显示 WNS 非负，当前解析到并输出的 WNS 为 `0.574 ns`。
 - Timing summary 包含 `All user specified timing constraints are met.`。
 
 如果后续修改了 `vivado/src` 或 IP，需要重新跑 Vivado implementation，并再次执行：

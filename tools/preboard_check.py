@@ -6,6 +6,8 @@ from __future__ import annotations
 import re
 import sys
 import xml.etree.ElementTree as ET
+import hashlib
+from datetime import datetime
 from pathlib import Path
 
 
@@ -69,6 +71,10 @@ def ok(name: str) -> None:
     print(f"{name} [OK]")
 
 
+def info(name: str, message: str) -> None:
+    print(f"{name} [INFO] {message}")
+
+
 def fail(name: str, message: str) -> None:
     print(f"{name} [FAIL] {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -120,6 +126,14 @@ def parse_timing_wns(timing_text: str) -> float | None:
         if match:
             return float(match.group(1))
     return None
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main() -> int:
@@ -191,6 +205,26 @@ def main() -> int:
         "vivado_bitstream_size",
         f"{bitstream.stat().st_size} bytes",
     )
+    bitstream_stat = bitstream.stat()
+    info(
+        "vivado_bitstream_manifest",
+        "path={} size={} mtime={} sha256={}".format(
+            bitstream.relative_to(REPO_ROOT),
+            bitstream_stat.st_size,
+            datetime.fromtimestamp(bitstream_stat.st_mtime).astimezone().isoformat(
+                sep=" ", timespec="seconds"
+            ),
+            sha256_file(bitstream),
+        ),
+    )
+    bin_files = sorted(IMPL_DIR.glob("*.bin"))
+    if bin_files:
+        info(
+            "vivado_flash_bin",
+            "found " + ", ".join(str(path.relative_to(REPO_ROOT)) for path in bin_files),
+        )
+    else:
+        info("vivado_flash_bin", "not found; program .bit or regenerate flash image")
 
     route_report = IMPLEMENTATION_ARTIFACTS["route_status"]
     require(route_report.exists(), "vivado_route_report_exists", str(route_report))
@@ -219,6 +253,7 @@ def main() -> int:
         "vivado_timing_wns_nonnegative",
         f"WNS={wns}",
     )
+    info("vivado_timing_manifest", f"WNS={wns} ns")
     require(
         "All user specified timing constraints are met." in timing_text,
         "vivado_timing_constraints_met",
