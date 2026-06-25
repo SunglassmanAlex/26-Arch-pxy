@@ -32,6 +32,7 @@
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、LSR overrun/parity/framing/break、break-only line-status 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
 - 新增 xv6/QEMU platform smoke 集成测试：在同一个 `SimMemoryWithVirtio` 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、virtio/uart 多源优先级仲裁和 complete 清中断路径。
 - 新增 Vivado 上板前静态检查：解析 `project_1.xpr`、Nexys4 DDR XDC 和顶层 wrapper，确认 part、工程文件、约束端口管脚和 `basys3_top` 兼容包装没有跑偏；同时检查已有 bitstream、route status、routed DRC 和 timing summary，确认 route errors=0、DRC violations=0、WNS 非负且 timing constraints met。
+- 新增 Nexys4 DDR 上板前 bring-up 清单：记录 bitstream 路径、大小、SHA256、routed report 状态、管脚、串口参数、预期 LED/UART 行为和实体板排查步骤。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
 - 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
@@ -415,6 +416,8 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   - 新增 xv6/QEMU platform smoke 集成测试，直接访问 QEMU 地址下的 CLINT、PLIC S context、16550 UART 和 virtio-mmio，验证 `msip/mtimecmp/mtime` 中断源、PLIC S enable/threshold/claim、UART RX interrupt claim 后 RBR 读取、virtio source 1 interrupt，以及 virtio/UART 同时 pending 时按 priority 仲裁并逐个 complete。
 - `tools/preboard_check.py`
   - 新增上板前静态检查脚本，使用 XML parser 读取 Vivado `project_1.xpr`，验证 Nexys4 DDR part、sources/constrs/sim/IP fileset 中的关键文件存在，检查 `basys3_top` 兼容 wrapper 指向 `nexys4_top`，检查 `clk/btnC/sw/led/RsTx/RsRx` 的 Nexys4 DDR XDC 管脚约束，并确认已有 `basys3_top.bit`、route status、routed DRC 和 timing summary 报告有效。
+- `docs/nexys4_bringup.md`
+  - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
   - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck` 和 `test-labplus-preboard`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口。
 - `ready-to-run/lab+/`
@@ -1065,6 +1068,23 @@ xv6 platform smoke test passed.
 ```
 
 这个集合不替代 Vivado 综合/实现和真实上板串口输出，但可以在没有板子的情况下快速确认 xv6/pre-board 相关的 Vivado 工程配置、已有 bitstream/report 健康状态、CPU 特权、MMU fault、S 态中断、SFENCE/WFI、CLINT/PLIC/UART/virtio 仿真模型没有被后续改动破坏。
+
+### 7.19 Nexys4 DDR 上板清单
+
+新增 `docs/nexys4_bringup.md`，用于拿到实体板后直接按步骤检查。当前记录的关键产物为：
+
+```text
+bitstream: vivado/test-cpu/project/project_1.runs/impl_1/basys3_top.bit
+size: 3825895 bytes
+mtime: 2026-05-26 15:03:00 +0800
+sha256: a241ead93ec40e5d7d8e5df113d11f4b84d8236c2aef45a9e56cbdc4f7efd7d0
+routing errors: 0
+routed DRC violations: 0
+timing WNS: 0.574 ns
+timing status: constraints met
+```
+
+该清单同时记录了当前 Vivado 工程仍使用 `basys3_top` 作为兼容 wrapper、实际实例化 `nexys4_top`，Nexys4 DDR 的 `clk/btnC/sw[3:0]/led[3:0]/RsTx/RsRx` 管脚约束，以及 `device.sv` 的板级串口参数。由于板级 UART 的 `BIT_TMR_MAX=10416` 且输入时钟为 100 MHz，实体板串口应设置为 `9600 8N1`。本地环境没有 `vivado` 或 `bootgen` 命令，因此当前不能重新生成 bitstream 或 flash `.bin/.mcs`；实际可烧写产物是已有 `.bit`。
 
 ## 8. 后续可做项
 
