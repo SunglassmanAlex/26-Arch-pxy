@@ -22,6 +22,7 @@
 \begin{itemize}
   \item 保留并验证 Lab1 extra 的乘除法扩展支持。
   \item 保留 Nexys4 上板适配，继续使用非 Basys3 开发板配置。
+  \item 保存 Nexys4 DDR Vivado 工程元数据：工程 top 使用 \texttt{basys3\_top} 兼容 wrapper，XDC 使用 Nexys4 DDR 管脚，BRAM/clk\_wiz IP 目标器件同步为 \texttt{xc7a100tcsg324-1}。
   \item 保留 Lab5 的 Sv39 MMU、2 MiB/1 GiB hugepage 支持、特权级和 Lab6 异常中断实现。
   \item 新增 Lab+ atomic extension：实现 AMO W 系列指令以及 \texttt{LR.W/SC.W}，并接入 difftest atomic event。
   \item 新增前端性能优化：顺序取指提前发起请求、\texttt{CBusArbiter} idle fast path，以及 \texttt{IBusToCBus} 8B 指令行缓冲，减少连续取指空泡。
@@ -348,6 +349,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   \item \texttt{vsrc/SimTop.sv}：仿真顶层改为实例化 \texttt{SimMemoryWithVirtio}，在原 RAM/CLINT 行为前增加 virtio/simple-block MMIO 拦截；显式连接 \texttt{if\_flush}，供取指侧 instruction line buffer 在控制流/地址翻译变化时失效。
   \item \texttt{vsrc/VTop.sv}、\texttt{vivado/src/with\_delay/soc\_top.sv}：连接 \texttt{if\_flush} 到 \texttt{IBusToCBus}，保持仿真顶层和上板顶层一致。
   \item \texttt{vivado/src/device.sv}：修复板级 UART 自动发送路径，\texttt{txData} 只在 UART idle 并接收新字符时装载，避免 finish 后 \texttt{Hello World} 字符串的一帧中途被下一字符覆盖；将自动字符串中的 \texttt{w} 修正为 \texttt{W}，保证真实串口输出为 \texttt{Hello World!\textbackslash r\textbackslash n}；同时显式化 \texttt{idx} reset 宽度，消除 Verilator 位宽 warning。
+  \item \texttt{vivado/src/Basys-3-Master.xdc}、\texttt{vivado/src/with\_delay/basys3\_top.sv}、\texttt{vivado/test-cpu/project/project\_1.xpr}、\texttt{vivado/test-cpu/src/ip/bram\_0/bram\_0.xci}、\texttt{vivado/test-cpu/src/ip/clk\_wiz\_0/clk\_wiz\_0.xci}：保存 Nexys4 DDR 上板工程配置，XDC 管脚对应 Nexys4 DDR，\texttt{basys3\_top} 兼容 wrapper 保留 \texttt{RsRx/RsTx} 端口，Vivado project 使用 \texttt{basys3\_top} 作为 synthesis top，并将 BRAM/clk\_wiz IP project param 对齐到 \texttt{xc7a100tcsg324-1}。
   \item \texttt{vsrc/include/common.sv}：扩展 CBus/IBus/DBus 响应，增加 \texttt{page\_fault}；扩展 CBus 请求，增加 \texttt{is\_instr} 标记。
   \item \texttt{vsrc/util/MMU.sv}：新增 fault 状态和 PTE 权限检查，不再将无效 PTE 转成物理地址 0；支持 Sv39 canonical 地址检查和巨页 PPN 对齐检查；支持 \texttt{SUM/MXR} 对 S/U 态数据访问和 execute-only 页读取的影响；新增 \texttt{S\_AD\_UPDATE} 状态，支持硬件置 PTE \texttt{A/D} 位。
   \item \texttt{vsrc/util/IBusToCBus.sv}、\texttt{vsrc/util/DBusToCBus.sv}：传递 \texttt{is\_instr} 与 \texttt{page\_fault}；\texttt{IBusToCBus} 新增 8B instruction line buffer，命中同一 64 位取指行时直接返回另一条 32 位指令。

@@ -1,6 +1,7 @@
 module nexys4_top (
 	input logic clk, btnC,
 	input logic [3:0] sw,
+	input logic RsRx,
 	output logic [3:0] led,
 	output logic RsTx
 );
@@ -18,6 +19,7 @@ endmodule
 module basys3_top (
 	input logic clk, btnC,
 	input logic [3:0] sw,
+	input logic RsRx,
 	output logic [3:0] led,
 	output logic RsTx
 );
@@ -25,6 +27,7 @@ module basys3_top (
 		.clk(clk),
 		.btnC(btnC),
 		.sw(sw),
+		.RsRx(RsRx),
 		.led(led),
 		.RsTx(RsTx)
 	);

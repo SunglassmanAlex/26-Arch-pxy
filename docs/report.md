@@ -14,6 +14,7 @@
 
 - 保留并验证 Lab1 extra 的乘除法扩展支持。
 - 保留 Nexys4 上板适配，继续使用非 Basys3 开发板配置。
+- 保存 Nexys4 DDR Vivado 工程元数据：工程 top 使用 `basys3_top` 兼容 wrapper，XDC 使用 Nexys4 DDR 管脚，BRAM/clk_wiz IP 目标器件同步为 `xc7a100tcsg324-1`。
 - 保留 Lab5 的 Sv39 MMU、2 MiB/1 GiB hugepage 支持、特权级和 Lab6 异常中断实现。
 - 新增 Lab+ atomic extension：实现 AMO W 系列指令以及 `LR.W/SC.W`，并接入 difftest atomic event。
 - 新增前端性能优化：顺序取指提前发起请求、`CBusArbiter` idle fast path，以及 `IBusToCBus` 8B 指令行缓冲，减少连续取指空泡。
@@ -373,6 +374,8 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   - 修复板级 UART 自动发送路径：`txData` 只在 UART idle 并接收新字符时装载，避免 finish 后 `Hello World` 字符串的一帧中途被下一字符覆盖。
   - 将自动字符串中的 `w` 修正为 `W`，保证真实串口输出为 `Hello World!\r\n`。
   - 显式化 `idx` reset 宽度，消除 Verilator 位宽 warning。
+- `vivado/src/Basys-3-Master.xdc`、`vivado/src/with_delay/basys3_top.sv`、`vivado/test-cpu/project/project_1.xpr`、`vivado/test-cpu/src/ip/bram_0/bram_0.xci`、`vivado/test-cpu/src/ip/clk_wiz_0/clk_wiz_0.xci`
+  - 保存 Nexys4 DDR 上板工程配置：XDC 管脚对应 Nexys4 DDR，`basys3_top` 兼容 wrapper 保留 `RsRx/RsTx` 端口，Vivado project 使用 `basys3_top` 作为 synthesis top，并将 BRAM/clk_wiz IP project param 对齐到 `xc7a100tcsg324-1`。
 - `vsrc/include/common.sv`
   - 扩展 CBus/IBus/DBus 响应，增加 `page_fault`。
   - 扩展 CBus 请求，增加 `is_instr` 标记。
