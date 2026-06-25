@@ -29,11 +29,14 @@ module simple_virtio_block_tb
     localparam u32 VIRTIO_FEATURE_BLK_SEG_MAX = 32'h0000_0004;
     localparam u32 VIRTIO_FEATURE_BLK_SIZE = 32'h0000_0040;
     localparam u32 VIRTIO_FEATURE_BLK_FLUSH = 32'h0000_0200;
+    localparam u32 VIRTIO_FEATURE_BLK_DISCARD = 32'h0000_2000;
+    localparam u32 VIRTIO_FEATURE_BLK_WRITE_ZEROES = 32'h0000_4000;
     localparam u32 VIRTIO_FEATURE_INDIRECT = 32'h1000_0000;
     localparam u32 VIRTIO_FEATURE_EVENT_IDX = 32'h2000_0000;
     localparam u32 VIRTIO_FEATURE_BLK =
         VIRTIO_FEATURE_BLK_SIZE_MAX | VIRTIO_FEATURE_BLK_SEG_MAX |
-        VIRTIO_FEATURE_BLK_SIZE | VIRTIO_FEATURE_BLK_FLUSH;
+        VIRTIO_FEATURE_BLK_SIZE | VIRTIO_FEATURE_BLK_FLUSH |
+        VIRTIO_FEATURE_BLK_DISCARD | VIRTIO_FEATURE_BLK_WRITE_ZEROES;
     localparam u32 VIRTIO_FEATURE_SEL0 =
         VIRTIO_FEATURE_BLK | VIRTIO_FEATURE_INDIRECT | VIRTIO_FEATURE_EVENT_IDX;
     localparam u32 VIRTIO_FEATURE_VERSION_1 = 32'h0000_0001;
@@ -297,6 +300,17 @@ module simple_virtio_block_tb
 
     task automatic write_blk_request(input u32 req_type, input word_t sector);
         write_blk_request_at(VQ_REQ_ADDR, req_type, sector);
+    endtask
+
+    task automatic write_blk_range_at(
+        input addr_t range_addr,
+        input word_t sector,
+        input u32 num_sectors,
+        input u32 flags
+    );
+        ram_write_u64(range_addr, sector);
+        ram_write_u32(range_addr + 64'd8, num_sectors);
+        ram_write_u32(range_addr + 64'd12, flags);
     endtask
 
     task automatic setup_virtqueue();
@@ -763,6 +777,78 @@ module simple_virtio_block_tb
                 $fatal(1, "dma word %0d read %h expected %h", word_idx, data, pattern(word_idx));
             end
         end
+
+        write_blk_request_at(VQ_REQ2_ADDR, 32'd13, 64'd0);
+        write_blk_range_at(VQ_BUF2_ADDR, 64'd3, 32'd1, 32'd0);
+        ram_write_byte(VQ_STATUS2_ADDR, 8'hff);
+        write_desc(5, VQ_REQ2_ADDR, 32'd16, VIRTQ_DESC_F_NEXT, 16'd6);
+        write_desc(6, VQ_BUF2_ADDR, 32'd16, VIRTQ_DESC_F_NEXT, 16'd7);
+        write_desc(7, VQ_STATUS2_ADDR, 32'd1, VIRTQ_DESC_F_WRITE, 16'd0);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd10, 16'd5);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd4);
+        cbus_write32(VIRTIO_BASE + 64'h050, 32'd0);
+        expect_ram_byte(VQ_STATUS2_ADDR, 8'd0, "virtio_xv6_write_zeroes_status");
+        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd4, "virtio_xv6_write_zeroes_used_idx");
+        expect_ram_u32(VQ_USED_ADDR + 64'd28, 32'd5, "virtio_xv6_write_zeroes_used_id");
+        expect_ram_u32(VQ_USED_ADDR + 64'd32, 32'd1, "virtio_xv6_write_zeroes_used_len");
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd1, "virtio_xv6_write_zeroes_interrupt");
+        cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
+        expect_read32(PLIC_PENDING, 32'd0, "virtio_xv6_write_zeroes_plic_clear");
+
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            ram_write_word(DMA_ADDR + 64'(word_idx * 8), pattern(word_idx));
+        end
+        cbus_write(VIRTIO_BASE + 64'h100, 64'd3);
+        cbus_write(VIRTIO_BASE + 64'h108, DMA_ADDR);
+        cbus_write(VIRTIO_BASE + 64'h110, 64'd1);
+        expect_read(VIRTIO_BASE + 64'h118, 64'd0, "virtio_write_zeroes_verify_read_status");
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            word_t data;
+            data = ram_read_word(DMA_ADDR + 64'(word_idx * 8));
+            if (data !== 64'd0) begin
+                $fatal(1, "write zeroes word %0d read %h expected 0", word_idx, data);
+            end
+        end
+        $display("virtio_write_zeroes_data [OK]");
+
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            ram_write_word(DMA_ADDR + 64'(word_idx * 8), pattern(word_idx));
+        end
+        cbus_write(VIRTIO_BASE + 64'h100, 64'd3);
+        cbus_write(VIRTIO_BASE + 64'h108, DMA_ADDR);
+        cbus_write(VIRTIO_BASE + 64'h110, 64'd2);
+        expect_read(VIRTIO_BASE + 64'h118, 64'd0, "virtio_discard_prepare_write_status");
+
+        write_blk_request_at(VQ_REQ2_ADDR, 32'd11, 64'd0);
+        write_blk_range_at(VQ_BUF2_ADDR, 64'd3, 32'd1, 32'd0);
+        ram_write_byte(VQ_STATUS2_ADDR, 8'hff);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd12, 16'd5);
+        ram_write_u16(VQ_AVAIL_ADDR + 64'd2, 16'd5);
+        cbus_write32(VIRTIO_BASE + 64'h050, 32'd0);
+        expect_ram_byte(VQ_STATUS2_ADDR, 8'd0, "virtio_xv6_discard_status");
+        expect_ram_u16(VQ_USED_ADDR + 64'd2, 16'd5, "virtio_xv6_discard_used_idx");
+        expect_ram_u32(VQ_USED_ADDR + 64'd36, 32'd5, "virtio_xv6_discard_used_id");
+        expect_ram_u32(VQ_USED_ADDR + 64'd40, 32'd1, "virtio_xv6_discard_used_len");
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd1, "virtio_xv6_discard_interrupt");
+        cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
+        expect_read32(PLIC_PENDING, 32'd0, "virtio_xv6_discard_plic_clear");
+
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            ram_write_word(DMA_ADDR + 64'(word_idx * 8), 64'd0);
+        end
+        cbus_write(VIRTIO_BASE + 64'h100, 64'd3);
+        cbus_write(VIRTIO_BASE + 64'h108, DMA_ADDR);
+        cbus_write(VIRTIO_BASE + 64'h110, 64'd1);
+        expect_read(VIRTIO_BASE + 64'h118, 64'd0, "virtio_discard_verify_read_status");
+        for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
+            word_t data;
+            data = ram_read_word(DMA_ADDR + 64'(word_idx * 8));
+            if (data !== pattern(word_idx)) begin
+                $fatal(1, "discard word %0d read %h expected %h",
+                    word_idx, data, pattern(word_idx));
+            end
+        end
+        $display("virtio_discard_data_unchanged [OK]");
 
         $display("simple virtio block MMIO test passed.");
         $finish;

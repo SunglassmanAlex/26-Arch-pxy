@@ -48,11 +48,14 @@ module SimMemoryWithVirtio
     localparam u32 VIRTIO_BLK_FEATURE_SEG_MAX = 32'h0000_0004;
     localparam u32 VIRTIO_BLK_FEATURE_BLK_SIZE = 32'h0000_0040;
     localparam u32 VIRTIO_BLK_FEATURE_FLUSH = 32'h0000_0200;
+    localparam u32 VIRTIO_BLK_FEATURE_DISCARD = 32'h0000_2000;
+    localparam u32 VIRTIO_BLK_FEATURE_WRITE_ZEROES = 32'h0000_4000;
     localparam u32 VIRTIO_FEATURE_RING_INDIRECT = 32'h1000_0000;
     localparam u32 VIRTIO_FEATURE_RING_EVENT_IDX = 32'h2000_0000;
     localparam u32 VIRTIO_BLK_FEATURES_SEL0 =
         VIRTIO_BLK_FEATURE_SIZE_MAX | VIRTIO_BLK_FEATURE_SEG_MAX |
-        VIRTIO_BLK_FEATURE_BLK_SIZE | VIRTIO_BLK_FEATURE_FLUSH;
+        VIRTIO_BLK_FEATURE_BLK_SIZE | VIRTIO_BLK_FEATURE_FLUSH |
+        VIRTIO_BLK_FEATURE_DISCARD | VIRTIO_BLK_FEATURE_WRITE_ZEROES;
     localparam u32 VIRTIO_FEATURES_SEL0 =
         VIRTIO_BLK_FEATURES_SEL0 | VIRTIO_FEATURE_RING_INDIRECT | VIRTIO_FEATURE_RING_EVENT_IDX;
     localparam u32 VIRTIO_FEATURES_SEL1 = 32'h0000_0001;
@@ -61,6 +64,8 @@ module SimMemoryWithVirtio
     localparam u32 VIRTIO_BLK_T_IN = 32'd0;
     localparam u32 VIRTIO_BLK_T_OUT = 32'd1;
     localparam u32 VIRTIO_BLK_T_FLUSH = 32'd4;
+    localparam u32 VIRTIO_BLK_T_DISCARD = 32'd11;
+    localparam u32 VIRTIO_BLK_T_WRITE_ZEROES = 32'd13;
     localparam u8 VIRTIO_BLK_S_OK = 8'd0;
     localparam u8 VIRTIO_BLK_S_IOERR = 8'd1;
     localparam u8 VIRTIO_BLK_S_UNSUPP = 8'd2;
@@ -719,7 +724,10 @@ module SimMemoryWithVirtio
         u8 status;
         u32 used_len;
         int disk_base_word;
+        int range_sector_idx;
         word_t write_word;
+        word_t range_sector;
+        u32 range_num_sectors;
         logic status_desc_valid;
         addr_t status_desc_addr;
         begin
@@ -782,6 +790,42 @@ module SimMemoryWithVirtio
                 end
                 else begin
                     status = VIRTIO_BLK_S_OK;
+                end
+            end
+            else if ((req_type == VIRTIO_BLK_T_DISCARD) ||
+                (req_type == VIRTIO_BLK_T_WRITE_ZEROES)) begin
+                if (((desc0_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
+                    ((desc1_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
+                    (desc0_len < 32'd16) || (desc1_len < 32'd16) ||
+                    (desc2_len < 32'd1) || !status_desc_valid ||
+                    ((desc1_flags & VIRTQ_DESC_F_WRITE) != 16'd0)) begin
+                    status = VIRTIO_BLK_S_IOERR;
+                end
+                else begin
+                    range_sector = ram_read_u64_addr(desc1_addr);
+                    range_num_sectors = ram_read_u32_addr(desc1_addr + 64'd8);
+                    if ((range_num_sectors == 32'd0) ||
+                        (range_sector >= 64'(SIMPLE_BLK_SECTORS)) ||
+                        (range_num_sectors > u32'(SIMPLE_BLK_SECTORS)) ||
+                        ((range_sector + 64'(range_num_sectors)) > 64'(SIMPLE_BLK_SECTORS))) begin
+                        status = VIRTIO_BLK_S_IOERR;
+                    end
+                    else begin
+                        if (req_type == VIRTIO_BLK_T_WRITE_ZEROES) begin
+                            for (range_sector_idx = 0;
+                                range_sector_idx < int'(range_num_sectors);
+                                range_sector_idx += 1) begin
+                                disk_base_word = (int'(range_sector[31:0]) + range_sector_idx) *
+                                    SIMPLE_BLK_WORDS_PER_SECTOR;
+                                for (int word_idx = 0;
+                                    word_idx < SIMPLE_BLK_WORDS_PER_SECTOR;
+                                    word_idx += 1) begin
+                                    disk[disk_base_word + word_idx] <= 64'd0;
+                                end
+                            end
+                        end
+                        status = VIRTIO_BLK_S_OK;
+                    end
                 end
             end
             else if (((desc0_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
