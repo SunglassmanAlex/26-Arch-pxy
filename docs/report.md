@@ -31,7 +31,7 @@
 - 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1、UART 事件接到 PLIC source 10。
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、LSR overrun/parity/framing/break、break-only line-status 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
 - 新增 xv6/QEMU platform smoke 集成测试：在同一个 `SimMemoryWithVirtio` 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、virtio/uart 多源优先级仲裁和 complete 清中断路径。
-- 新增 Vivado 上板前静态检查：解析 `project_1.xpr`、Nexys4 DDR XDC 和顶层 wrapper，确认 part、工程文件、约束端口管脚和 `basys3_top` 兼容包装没有跑偏。
+- 新增 Vivado 上板前静态检查：解析 `project_1.xpr`、Nexys4 DDR XDC 和顶层 wrapper，确认 part、工程文件、约束端口管脚和 `basys3_top` 兼容包装没有跑偏；同时检查已有 bitstream、route status、routed DRC 和 timing summary，确认 route errors=0、DRC violations=0、WNS 非负且 timing constraints met。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
 - 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
@@ -414,7 +414,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/xv6_platform_smoke_tb.sv`
   - 新增 xv6/QEMU platform smoke 集成测试，直接访问 QEMU 地址下的 CLINT、PLIC S context、16550 UART 和 virtio-mmio，验证 `msip/mtimecmp/mtime` 中断源、PLIC S enable/threshold/claim、UART RX interrupt claim 后 RBR 读取、virtio source 1 interrupt，以及 virtio/UART 同时 pending 时按 priority 仲裁并逐个 complete。
 - `tools/preboard_check.py`
-  - 新增上板前静态检查脚本，使用 XML parser 读取 Vivado `project_1.xpr`，验证 Nexys4 DDR part、sources/constrs/sim/IP fileset 中的关键文件存在，检查 `basys3_top` 兼容 wrapper 指向 `nexys4_top`，并检查 `clk/btnC/sw/led/RsTx/RsRx` 的 Nexys4 DDR XDC 管脚约束。
+  - 新增上板前静态检查脚本，使用 XML parser 读取 Vivado `project_1.xpr`，验证 Nexys4 DDR part、sources/constrs/sim/IP fileset 中的关键文件存在，检查 `basys3_top` 兼容 wrapper 指向 `nexys4_top`，检查 `clk/btnC/sw/led/RsTx/RsRx` 的 Nexys4 DDR XDC 管脚约束，并确认已有 `basys3_top.bit`、route status、routed DRC 和 timing summary 报告有效。
 - `Makefile`
   - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck` 和 `test-labplus-preboard`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口。
 - `ready-to-run/lab+/`
@@ -1031,10 +1031,15 @@ vivado_basys3_compat_wrapper [OK]
 vivado_xdc_pin_clk [OK]
 vivado_xdc_pin_RsTx [OK]
 vivado_xdc_pin_RsRx [OK]
-Vivado pre-board source check passed.
+vivado_bitstream_exists [OK]
+vivado_route_errors_zero [OK]
+vivado_drc_violations_zero [OK]
+vivado_timing_wns_nonnegative [OK]
+vivado_timing_constraints_met [OK]
+Vivado pre-board check passed.
 ```
 
-该检查不调用 Vivado，也不生成 bitstream；它只对工程元数据和文本约束做静态校验。这样在没有板子和 GUI 的情况下，仍能尽早发现上板常见问题：工程 part 不是 Nexys4 DDR、关键 `with_delay` 源文件或 IP/XDC 未列入 `.xpr`、顶层 wrapper 改丢、或者串口/时钟/按钮/LED 管脚约束不匹配。
+该检查不调用 Vivado，也不重新生成 bitstream；它对工程元数据、文本约束和已有实现报告做静态校验。这样在没有板子和 GUI 的情况下，仍能尽早发现上板常见问题：工程 part 不是 Nexys4 DDR、关键 `with_delay` 源文件或 IP/XDC 未列入 `.xpr`、顶层 wrapper 改丢、串口/时钟/按钮/LED 管脚约束不匹配、没有可烧写 `.bit`，或 routed report 中出现 routing/DRC/timing 问题。
 
 ### 7.18 上板前自动集合回归
 
@@ -1047,7 +1052,7 @@ make test-labplus-preboard
 该入口顺序运行 `test-labplus-vivado-precheck`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio` 和 `test-labplus-xv6smoke`。本次回归全部通过，关键收尾输出包括：
 
 ```text
-Vivado pre-board source check passed.
+Vivado pre-board check passed.
 MMU page fault directed tests passed.
 S-mode interrupt pending delegation test passed.
 SFENCE.VMA directed test passed.
@@ -1059,7 +1064,7 @@ simple virtio block MMIO test passed.
 xv6 platform smoke test passed.
 ```
 
-这个集合不替代 Vivado 综合/实现和真实上板串口输出，但可以在没有板子的情况下快速确认 xv6/pre-board 相关的 Vivado 工程配置、CPU 特权、MMU fault、S 态中断、SFENCE/WFI、CLINT/PLIC/UART/virtio 仿真模型没有被后续改动破坏。
+这个集合不替代 Vivado 综合/实现和真实上板串口输出，但可以在没有板子的情况下快速确认 xv6/pre-board 相关的 Vivado 工程配置、已有 bitstream/report 健康状态、CPU 特权、MMU fault、S 态中断、SFENCE/WFI、CLINT/PLIC/UART/virtio 仿真模型没有被后续改动破坏。
 
 ## 8. 后续可做项
 

@@ -12,9 +12,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECT = REPO_ROOT / "vivado" / "test-cpu" / "project" / "project_1.xpr"
 PROJECT_DIR = PROJECT.parent
+IMPL_DIR = PROJECT_DIR / "project_1.runs" / "impl_1"
 
 EXPECTED_PART = "xc7a100tcsg324-1"
 EXPECTED_TOP = "basys3_top"
+MIN_BITSTREAM_SIZE = 1024 * 1024
 
 REQUIRED_FILESET_PATHS = {
     "sources_1": [
@@ -53,6 +55,13 @@ REQUIRED_XDC_PINS = {
     "led[3]": "N14",
     "RsTx": "D4",
     "RsRx": "C4",
+}
+
+IMPLEMENTATION_ARTIFACTS = {
+    "bitstream": IMPL_DIR / "basys3_top.bit",
+    "route_status": IMPL_DIR / "basys3_top_route_status.rpt",
+    "drc_routed": IMPL_DIR / "basys3_top_drc_routed.rpt",
+    "timing_summary": IMPL_DIR / "basys3_top_timing_summary_routed.rpt",
 }
 
 
@@ -103,6 +112,14 @@ def xdc_has_pin(xdc_text: str, port: str, pin: str) -> bool:
     port_pattern = re.escape(port)
     pattern = rf"PACKAGE_PIN\s+{re.escape(pin)}\b.*get_ports\s+\{{?{port_pattern}\}}?"
     return re.search(pattern, xdc_text) is not None
+
+
+def parse_timing_wns(timing_text: str) -> float | None:
+    for line in timing_text.splitlines():
+        match = re.match(r"\s*(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+\d+\s+\d+", line)
+        if match:
+            return float(match.group(1))
+    return None
 
 
 def main() -> int:
@@ -167,7 +184,48 @@ def main() -> int:
             f"expected {port} on {pin}",
         )
 
-    print("Vivado pre-board source check passed.")
+    bitstream = IMPLEMENTATION_ARTIFACTS["bitstream"]
+    require(bitstream.exists(), "vivado_bitstream_exists", str(bitstream))
+    require(
+        bitstream.stat().st_size >= MIN_BITSTREAM_SIZE,
+        "vivado_bitstream_size",
+        f"{bitstream.stat().st_size} bytes",
+    )
+
+    route_report = IMPLEMENTATION_ARTIFACTS["route_status"]
+    require(route_report.exists(), "vivado_route_report_exists", str(route_report))
+    route_text = route_report.read_text(encoding="utf-8", errors="replace")
+    require(
+        re.search(r"# of nets with routing errors\.+\s*:\s*0\s*:", route_text) is not None,
+        "vivado_route_errors_zero",
+        "route report does not show zero routing errors",
+    )
+
+    drc_report = IMPLEMENTATION_ARTIFACTS["drc_routed"]
+    require(drc_report.exists(), "vivado_drc_report_exists", str(drc_report))
+    drc_text = drc_report.read_text(encoding="utf-8", errors="replace")
+    require(
+        "Violations found: 0" in drc_text,
+        "vivado_drc_violations_zero",
+        "routed DRC report has violations",
+    )
+
+    timing_report = IMPLEMENTATION_ARTIFACTS["timing_summary"]
+    require(timing_report.exists(), "vivado_timing_report_exists", str(timing_report))
+    timing_text = timing_report.read_text(encoding="utf-8", errors="replace")
+    wns = parse_timing_wns(timing_text)
+    require(
+        wns is not None and wns >= 0.0,
+        "vivado_timing_wns_nonnegative",
+        f"WNS={wns}",
+    )
+    require(
+        "All user specified timing constraints are met." in timing_text,
+        "vivado_timing_constraints_met",
+        "timing summary does not report timing met",
+    )
+
+    print("Vivado pre-board check passed.")
     return 0
 
 
