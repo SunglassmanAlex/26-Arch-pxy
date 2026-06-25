@@ -21,6 +21,7 @@ no_arguments:
 	@echo "  - test-labplus-plic: Run Lab+ directed PLIC MMIO test"
 	@echo "  - test-labplus-uart: Run Lab+ directed UART MMIO test"
 	@echo "  - test-labplus-virtio: Run Lab+ directed simple virtio block test"
+	@echo "  - test-labplus-xv6smoke: Run Lab+ xv6 platform MMIO smoke test"
 	@echo "  - test-labplus-preboard: Run Lab+ non-Vivado pre-board regression"
 
 init:
@@ -167,6 +168,18 @@ test-labplus-virtio:
 	  vsrc/test/ram_dpi_stubs.cpp
 	./build/simple-virtio/simple_virtio_block_tb +simple_blk_image=build/simple-virtio/simple-blk.img
 
+test-labplus-xv6smoke:
+	rm -rf build/xv6-platform-smoke
+	verilator --binary --timing --top-module xv6_platform_smoke_tb \
+	  +define+VERILATOR=1 +define+RANDOMIZE_DELAY=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/xv6-platform-smoke -o xv6_platform_smoke_tb \
+	  difftest/src/test/vsrc/common/ram.v \
+	  difftest/src/test/vsrc/common/ram.sv \
+	  vsrc/util/SimMemoryWithVirtio.sv \
+	  vsrc/test/xv6_platform_smoke_tb.sv \
+	  vsrc/test/ram_dpi_stubs.cpp
+	./build/xv6-platform-smoke/xv6_platform_smoke_tb
+
 test-labplus-preboard:
 	$(MAKE) test-labplus-pagefault
 	$(MAKE) test-labplus-sinterrupt
@@ -176,6 +189,7 @@ test-labplus-preboard:
 	$(MAKE) test-labplus-plic
 	$(MAKE) test-labplus-uart
 	$(MAKE) test-labplus-virtio
+	$(MAKE) test-labplus-xv6smoke
 
 clean:
 	rm -rf build
@@ -184,4 +198,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke

@@ -38,14 +38,15 @@
   \item 新增仿真侧 CLINT 地址兼容：\texttt{SimMemoryWithVirtio} 将 QEMU/xv6 \texttt{0x0200...} 的 \texttt{msip/mtimecmp/mtime} 地址映射到课程框架 \texttt{0x3800...} 地址。
   \item 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1、UART 事件接到 PLIC source 10。
   \item 新增仿真侧 16550 UART MMIO 模型：在 \texttt{0x10000000} 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、LSR overrun/parity/framing/break、break-only line-status 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
+  \item 新增 xv6/QEMU platform smoke 集成测试：在同一个 \texttt{SimMemoryWithVirtio} 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、virtio/uart 多源优先级仲裁和 complete 清中断路径。
   \item 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
   \item 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 \texttt{trint} 进入 S trap 的路径。
   \item 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
   \item 新增 WFI 定向测试，覆盖 S 态合法 no-op 后继续执行并进入 S 态 ecall trap，以及 U 态 WFI illegal trap。
-  \item 新增 \texttt{test-labplus-2/3/4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart}、\texttt{test-labplus-virtio} 与 \texttt{test-labplus-preboard} Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+  \item 新增 \texttt{test-labplus-2/3/4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart}、\texttt{test-labplus-virtio}、\texttt{test-labplus-xv6smoke} 与 \texttt{test-labplus-preboard} Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 \end{itemize}
 
-本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、SFENCE.VMA 定向测试、WFI 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试和 simple virtio block/virtqueue MMIO 定向测试。\texttt{lab+/4} 全量 \texttt{TEST=all} 已完成 benchmark 和 sys-test，最终输出 \texttt{Privileged test finished. Exit with code = 0}。当前官方 \texttt{all-test-privfull.bin} 中未包含真实 \texttt{ebreak} 指令，\texttt{breakpoint [X]} 来自测试程序自身的占位输出；补充 \texttt{EBREAK} 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、SFENCE.VMA 定向测试、WFI 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试和 xv6/QEMU platform smoke 集成测试。\texttt{lab+/4} 全量 \texttt{TEST=all} 已完成 benchmark 和 sys-test，最终输出 \texttt{Privileged test finished. Exit with code = 0}。当前官方 \texttt{all-test-privfull.bin} 中未包含真实 \texttt{ebreak} 指令，\texttt{breakpoint [X]} 来自测试程序自身的占位输出；补充 \texttt{EBREAK} 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 \section{Atomic Extension 设计}
 
@@ -358,7 +359,8 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
   \item \texttt{vsrc/test/uart\_mmio\_tb.sv}：新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、parity/framing/break line-status interrupt、break-only 不入队、modem-status loopback interrupt、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
   \item \texttt{vsrc/test/clint\_alias\_tb.sv}：新增 CLINT 地址别名定向测试，验证 legacy/QEMU 地址共享 \texttt{msip/mtimecmp/mtime} 状态，并覆盖 \texttt{swint/trint} 产生和清除。
   \item \texttt{vsrc/test/simple\_virtio\_block\_tb.sv}、\texttt{vsrc/test/ram\_dpi\_stubs.cpp}：新增 simple-block MMIO 定向测试和 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、\texttt{ConfigGeneration}、非 0 \texttt{QueueSel} 不可用且不污染 queue 0、未知命令/越界 sector 错误状态、block/ring feature negotiation、virtqueue read/write、indirect descriptor read、一次 \texttt{QueueNotify} 多 pending entry、\texttt{InterruptACK} 清 PLIC pending、event idx 抑制/触发中断、xv6 风格普通 avail flags 中断控制、\texttt{VIRTIO\_BLK\_T\_FLUSH} 两段链、\texttt{VIRTIO\_BLK\_T\_WRITE\_ZEROES} 清零 sector、\texttt{VIRTIO\_BLK\_T\_DISCARD} no-op 成功、\texttt{Status=0} reset、512B sector write/read。
-  \item \texttt{Makefile}：新增 \texttt{test-labplus-2}、\texttt{test-labplus-3}、\texttt{test-labplus-4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart}、\texttt{test-labplus-virtio} 和 \texttt{test-labplus-preboard}。其中 \texttt{test-labplus-preboard} 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口。
+  \item \texttt{vsrc/test/xv6\_platform\_smoke\_tb.sv}：新增 xv6/QEMU platform smoke 集成测试，直接访问 QEMU 地址下的 CLINT、PLIC S context、16550 UART 和 virtio-mmio，验证 \texttt{msip/mtimecmp/mtime} 中断源、PLIC S enable/threshold/claim、UART RX interrupt claim 后 RBR 读取、virtio source 1 interrupt，以及 virtio/UART 同时 pending 时按 priority 仲裁并逐个 complete。
+  \item \texttt{Makefile}：新增 \texttt{test-labplus-2}、\texttt{test-labplus-3}、\texttt{test-labplus-4}、\texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart}、\texttt{test-labplus-virtio}、\texttt{test-labplus-xv6smoke} 和 \texttt{test-labplus-preboard}。其中 \texttt{test-labplus-preboard} 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口。
   \item \texttt{ready-to-run/lab+/}：补充官方 Lab+ 测试二进制和汇编反汇编文件。
 \end{itemize}
 
@@ -828,6 +830,27 @@ CLINT alias directed tests passed.
 
 该测试实例化 \texttt{SimMemoryWithVirtio}，覆盖与仿真顶层相同的地址映射路径。测试先验证原课程 \texttt{0x3800...} 地址仍可读写并驱动 \texttt{swint}，再验证 QEMU/xv6 \texttt{0x0200...} 地址写入后可以从 legacy 地址读到相同状态，最后通过交叉写 \texttt{mtime/mtimecmp} 验证两套地址共同影响 \texttt{trint} 的置位和清除。
 
+\subsection{xv6/QEMU platform smoke 集成测试}
+
+\begin{Verbatim}[fontsize=\small]
+make test-labplus-xv6smoke
+xv6_smoke_clint_msip_read [OK]
+xv6_smoke_clint_swint_set [OK]
+xv6_smoke_clint_trint_set [OK]
+xv6_smoke_plic_s_enable [OK]
+xv6_smoke_uart_rx_inject [OK]
+xv6_smoke_uart_lsr_ready [OK]
+xv6_smoke_uart_s_claim [OK]
+xv6_smoke_uart_rbr [OK]
+xv6_smoke_virtio_s_claim [OK]
+xv6_smoke_multi_claim_virtio_first [OK]
+xv6_smoke_multi_claim_uart_second [OK]
+xv6_smoke_multi_complete [OK]
+xv6 platform smoke test passed.
+\end{Verbatim}
+
+该测试在一个 \texttt{SimMemoryWithVirtio} 实例中覆盖 xv6/QEMU 常见平台路径：先用 \texttt{0x0200...} CLINT 地址验证软件中断和时钟中断；再配置 PLIC S context 的 enable/threshold；随后模拟 16550 UART 初始化、host 注入字符、PLIC S claim、claim 后读 RBR 和 complete；再触发 virtio source 1 并验证 claim/complete；最后同时置位 virtio 和 UART，确认 higher priority 的 virtio 先被 claim，UART 作为剩余 pending source 继续被 claim。测试中 \texttt{CBus} 读任务在本地 MMIO side-effect 时钟沿之前采样 \texttt{oresp.data}，避免 RBR 读副作用先清 FIFO 导致数据丢失。
+
 \subsection{上板前非 Vivado 集合回归}
 
 \begin{Verbatim}[fontsize=\small]
@@ -840,13 +863,14 @@ CLINT alias directed tests passed.
 PLIC MMIO directed tests passed.
 UART MMIO directed tests passed.
 simple virtio block MMIO test passed.
+xv6 platform smoke test passed.
 \end{Verbatim}
 
-该入口顺序运行 \texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart} 和 \texttt{test-labplus-virtio}。它不替代 Vivado 综合/实现和真实上板串口输出，但可以在没有板子的情况下快速确认 xv6/pre-board 相关的 CPU 特权、MMU fault、S 态中断、SFENCE/WFI、CLINT/PLIC/UART/virtio 仿真模型没有被后续改动破坏。
+该入口顺序运行 \texttt{test-labplus-pagefault}、\texttt{test-labplus-sinterrupt}、\texttt{test-labplus-sfence}、\texttt{test-labplus-wfi}、\texttt{test-labplus-clint}、\texttt{test-labplus-plic}、\texttt{test-labplus-uart}、\texttt{test-labplus-virtio} 和 \texttt{test-labplus-xv6smoke}。它不替代 Vivado 综合/实现和真实上板串口输出，但可以在没有板子的情况下快速确认 xv6/pre-board 相关的 CPU 特权、MMU fault、S 态中断、SFENCE/WFI、CLINT/PLIC/UART/virtio 仿真模型没有被后续改动破坏。
 
 \section{后续可做项}
 
-本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、\texttt{SFENCE.VMA} 合法/非法路径覆盖、S/M 态 \texttt{WFI} 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，并补了独立 page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART 和 simple-block/virtqueue 定向测试。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、\texttt{SFENCE.VMA} 合法/非法路径覆盖、S/M 态 \texttt{WFI} 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，并补了独立 page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试和 xv6/QEMU platform smoke 集成测试。后续如果继续推进 xv6，需要补充：
 
 \begin{itemize}
   \item 更高级的 virtio block 多 queue、packed queue、动态配置变更通知和更完整的 config 字段。
@@ -859,7 +883,7 @@ simple virtio block MMIO test passed.
 
 \section{总结}
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I}/\texttt{WFI} 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、\texttt{SUM/MXR} 权限补充、PTE A/D 位硬件更新、\texttt{SFENCE.VMA} 合法/非法路径覆盖、S/M 态 \texttt{WFI} 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART 和 simple-block/virtqueue 定向测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、CLINT alias directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、\texttt{EBREAK} 断点异常、\texttt{FENCE/FENCE.I}/\texttt{WFI} 兼容，并加入顺序取指提前、CBus fast path 和 8B 指令行缓冲等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、\texttt{SRET}、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、\texttt{SUM/MXR} 权限补充、PTE A/D 位硬件更新、\texttt{SFENCE.VMA} 合法/非法路径覆盖、S/M 态 \texttt{WFI} 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试和 xv6/QEMU platform smoke 集成测试。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 \texttt{LR.W/SC.W} 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93022，将 Lab4 周期数从 208529 降到 110574，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、MMU page fault directed tests、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、CLINT alias directed test、PLIC MMIO directed test、UART MMIO directed test、simple virtio block MMIO test、xv6 platform smoke test、Lab1 extra、Lab4、Lab5、Lab6 均完成回归。
 
 \section{AI 使用说明}
 
