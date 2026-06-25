@@ -78,7 +78,8 @@ module SimTop import common::*;(
         .uart_out_valid(io_uart_out_valid),
         .uart_out_ch(io_uart_out_ch),
         .uart_in_valid(io_uart_in_valid),
-        .uart_in_ch(io_uart_in_ch)
+        .uart_in_ch(io_uart_in_ch),
+        .uart_in_error(3'b000)
     );
 
 endmodule

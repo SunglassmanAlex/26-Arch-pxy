@@ -26,6 +26,7 @@ module uart_mmio_tb
     logic trint, swint, exint;
     logic uart_out_valid, uart_in_valid;
     logic [7:0] uart_out_ch, uart_in_ch;
+    logic [2:0] uart_in_error;
 
     SimMemoryWithVirtio dut(
         .clk(clk),
@@ -38,7 +39,8 @@ module uart_mmio_tb
         .uart_out_valid(uart_out_valid),
         .uart_out_ch(uart_out_ch),
         .uart_in_valid(uart_in_valid),
-        .uart_in_ch(uart_in_ch)
+        .uart_in_ch(uart_in_ch),
+        .uart_in_error(uart_in_error)
     );
 
     always #5 clk = ~clk;
@@ -191,9 +193,26 @@ module uart_mmio_tb
             $fatal(1, "%s uart_in_valid is low", name);
         end
         uart_in_ch = data;
+        uart_in_error = 3'b000;
         @(posedge clk);
         #1;
         uart_in_ch = 8'hff;
+        uart_in_error = 3'b000;
+        @(posedge clk);
+        #1;
+        $display("%s [OK]", name);
+    endtask
+
+    task automatic inject_rx_with_error(input u8 data, input logic [2:0] error, input string name);
+        if (!uart_in_valid) begin
+            $fatal(1, "%s uart_in_valid is low", name);
+        end
+        uart_in_ch = data;
+        uart_in_error = error;
+        @(posedge clk);
+        #1;
+        uart_in_ch = 8'hff;
+        uart_in_error = 3'b000;
         @(posedge clk);
         #1;
         $display("%s [OK]", name);
@@ -201,9 +220,11 @@ module uart_mmio_tb
 
     task automatic force_rx(input u8 data, input string name);
         uart_in_ch = data;
+        uart_in_error = 3'b000;
         @(posedge clk);
         #1;
         uart_in_ch = 8'hff;
+        uart_in_error = 3'b000;
         @(posedge clk);
         #1;
         $display("%s [OK]", name);
@@ -221,6 +242,7 @@ module uart_mmio_tb
         reset = 1'b1;
         oreq = '0;
         uart_in_ch = 8'hff;
+        uart_in_error = 3'b000;
         repeat (3) @(posedge clk);
         reset = 1'b0;
         @(posedge clk);
@@ -296,6 +318,16 @@ module uart_mmio_tb
         expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_overrun_claim");
         expect_exint(1'b0, "plic_uart_overrun_claim_clears_exint");
         write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_overrun_complete");
+
+        inject_rx_with_error(8'h70, 3'b111, "uart_rx_line_errors_inject");
+        expect8(UART_IIR_FCR, 8'h06, "uart_iir_line_errors_priority");
+        expect8(UART_LSR, 8'hfd, "uart_lsr_parity_framing_break");
+        expect8(UART_LSR, 8'h61, "uart_lsr_line_errors_cleared");
+        expect8(UART_RBR_THR_DLL, 8'h70, "uart_rx_line_errors_read");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_line_errors_cleared");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_line_errors_claim");
+        expect_exint(1'b0, "plic_uart_line_errors_claim_clears_exint");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_line_errors_complete");
 
         write8(UART_IER_DLM, 8'h02, 1'b0, 8'd0, "uart_ier_enable_thre");
         expect_exint(1'b1, "plic_uart_thre_exint");

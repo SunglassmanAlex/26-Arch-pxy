@@ -18,6 +18,7 @@ module clint_alias_tb
     logic trint, swint, exint;
     logic uart_out_valid, uart_in_valid;
     logic [7:0] uart_out_ch, uart_in_ch;
+    logic [2:0] uart_in_error;
 
     SimMemoryWithVirtio dut(
         .clk(clk),
@@ -30,7 +31,8 @@ module clint_alias_tb
         .uart_out_valid(uart_out_valid),
         .uart_out_ch(uart_out_ch),
         .uart_in_valid(uart_in_valid),
-        .uart_in_ch(uart_in_ch)
+        .uart_in_ch(uart_in_ch),
+        .uart_in_error(uart_in_error)
     );
 
     always #5 clk = ~clk;
@@ -132,6 +134,7 @@ module clint_alias_tb
         reset = 1'b1;
         oreq = '0;
         uart_in_ch = 8'hff;
+        uart_in_error = 3'b000;
         repeat (3) @(posedge clk);
         reset = 1'b0;
         @(posedge clk);
