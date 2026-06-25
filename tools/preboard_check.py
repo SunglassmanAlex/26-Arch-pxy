@@ -79,6 +79,10 @@ def info(name: str, message: str) -> None:
     print(f"{name} [INFO] {message}")
 
 
+def warn(name: str, message: str) -> None:
+    print(f"{name} [WARN] {message}")
+
+
 def fail(name: str, message: str) -> None:
     print(f"{name} [FAIL] {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -185,10 +189,31 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def report_bitstream_freshness(bitstream: Path, inputs: set[Path]) -> None:
+    bitstream_mtime = bitstream.stat().st_mtime
+    newer_inputs = [
+        path for path in sorted(inputs) if path.exists() and path.stat().st_mtime > bitstream_mtime + 1.0
+    ]
+
+    if not newer_inputs:
+        ok("vivado_bitstream_fresh")
+        return
+
+    shown = ", ".join(str(path.relative_to(REPO_ROOT)) for path in newer_inputs[:8])
+    if len(newer_inputs) > 8:
+        shown += f", ... ({len(newer_inputs)} total)"
+    warn(
+        "vivado_bitstream_stale",
+        "newer inputs after .bit; rerun Vivado implementation before final board test: "
+        + shown,
+    )
+
+
 def main() -> int:
     require(PROJECT.exists(), "vivado_project_exists", str(PROJECT))
 
     root = ET.parse(PROJECT).getroot()
+    bitstream_inputs = {PROJECT}
     part = root.find("./Configuration/Option[@Name='Part']")
     require(
         part is not None and part.attrib.get("Val") == EXPECTED_PART,
@@ -199,6 +224,7 @@ def main() -> int:
     for set_name, relative_paths in REQUIRED_FILESET_PATHS.items():
         node = fileset(root, set_name)
         present = files_in(node)
+        bitstream_inputs.update(path for path in present if path.exists())
         for relative in relative_paths:
             resolved = (PROJECT_DIR / relative).resolve()
             require(
@@ -298,6 +324,7 @@ def main() -> int:
         "vivado_bitstream_size",
         f"{bitstream.stat().st_size} bytes",
     )
+    report_bitstream_freshness(bitstream, bitstream_inputs)
     bitstream_stat = bitstream.stat()
     info(
         "vivado_bitstream_manifest",

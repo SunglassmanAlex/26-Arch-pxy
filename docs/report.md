@@ -33,7 +33,7 @@
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、LSR overrun/parity/framing/break、break-only line-status 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
 - 新增 xv6/QEMU platform smoke 集成测试：在同一个 `SimMemoryWithVirtio` 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、virtio/uart 多源优先级仲裁和 complete 清中断路径。
 - 新增 Vivado 上板前静态检查：解析 `project_1.xpr`、Nexys4 DDR XDC 和顶层 wrapper，确认 part、工程文件、约束端口管脚和 `basys3_top` 兼容包装没有跑偏；同时检查已有 bitstream、route status、routed DRC 和 timing summary，确认 route errors=0、DRC violations=0、WNS 非负且 timing constraints met。
-- 扩展 Vivado/preboard 检查：自动打印当前 `.bit` 的 path、size、mtime、SHA256、`.bin` 缺失提示和 timing WNS，并固化板级 UART 的 `Hello World!\r\n\0` ROM、9600 baud tick、10 bit frame、`txData` idle guard 和 TX ready gate，便于上板时比对烧写文件并提前发现串口回归。
+- 扩展 Vivado/preboard 检查：自动打印当前 `.bit` 的 path、size、mtime、SHA256、`.bin` 缺失提示和 timing WNS，提示 `.bit` 是否旧于 Vivado 输入文件，并固化板级 UART 的 `Hello World!\r\n\0` ROM、9600 baud tick、10 bit frame、`txData` idle guard 和 TX ready gate，便于上板时比对烧写文件并提前发现串口回归。
 - 新增 Nexys4 board device UART/LED 定向测试：直接仿真 `device #(.SIMULATION(0))`，覆盖 reset 后 LED/TX idle、开关读数、finish LED、真实 UART bit sampling 和完整 `Hello World!\r\n` 输出。
 - 修复板级 UART 自动字符串发送：避免 `txData` 在一帧发送过程中被下一字符覆盖，并将串口 ROM 中的小写 `w` 修正为大写 `W`，保证真实串口输出和预期一致。
 - 新增 Nexys4 DDR 上板前 bring-up 清单：记录 bitstream 路径、大小、SHA256、routed report 状态、管脚、串口参数、预期 LED/UART 行为和实体板排查步骤。
@@ -427,7 +427,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/board_device_tb.sv`
   - 新增 Nexys4 board device 定向测试，实例化 `device #(.SIMULATION(0))`，验证 reset 后 LED/TX idle、SW MMIO 读数、finish LED 点亮和 9600 baud UART bit-level 采样出的 `Hello World!\r\n`。
 - `tools/preboard_check.py`
-  - 新增上板前静态检查脚本，使用 XML parser 读取 Vivado `project_1.xpr`，验证 Nexys4 DDR part、sources/constrs/sim/IP fileset 中的关键文件存在，检查 `basys3_top` 兼容 wrapper 指向 `nexys4_top`，检查 `clk/btnC/sw/led/RsTx/RsRx` 的 Nexys4 DDR XDC 管脚约束，并确认已有 `basys3_top.bit`、route status、routed DRC 和 timing summary 报告有效；同时输出 `.bit` path/size/mtime/SHA256、`.bin` 缺失提示和 timing WNS，并静态检查板级 UART 字符串 ROM、9600 baud tick、frame bit 数、`txData` idle guard 和 TX ready gate。
+  - 新增上板前静态检查脚本，使用 XML parser 读取 Vivado `project_1.xpr`，验证 Nexys4 DDR part、sources/constrs/sim/IP fileset 中的关键文件存在，检查 `basys3_top` 兼容 wrapper 指向 `nexys4_top`，检查 `clk/btnC/sw/led/RsTx/RsRx` 的 Nexys4 DDR XDC 管脚约束，并确认已有 `basys3_top.bit`、route status、routed DRC 和 timing summary 报告有效；同时输出 `.bit` path/size/mtime/SHA256、`.bin` 缺失提示、timing WNS 和 bitstream freshness warning，并静态检查板级 UART 字符串 ROM、9600 baud tick、frame bit 数、`txData` idle guard 和 TX ready gate。
 - `docs/nexys4_bringup.md`
   - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
@@ -1053,6 +1053,7 @@ vivado_xdc_pin_clk [OK]
 vivado_xdc_pin_RsTx [OK]
 vivado_xdc_pin_RsRx [OK]
 vivado_bitstream_exists [OK]
+vivado_bitstream_stale [WARN] newer inputs after .bit; rerun Vivado implementation before final board test: vivado/src/device.sv, vivado/src/with_delay/soc_top.sv, vivado/test-cpu/project/project_1.xpr
 vivado_bitstream_manifest [INFO] path=vivado/test-cpu/project/project_1.runs/impl_1/basys3_top.bit size=3825895 mtime=2026-05-26 15:03:00+08:00 sha256=a241ead93ec40e5d7d8e5df113d11f4b84d8236c2aef45a9e56cbdc4f7efd7d0
 vivado_flash_bin [INFO] not found; program .bit or regenerate flash image
 vivado_route_errors_zero [OK]
@@ -1063,7 +1064,7 @@ vivado_timing_constraints_met [OK]
 Vivado pre-board check passed.
 ```
 
-该检查不调用 Vivado，也不重新生成 bitstream；它对工程元数据、文本约束、板级串口关键逻辑和已有实现报告做静态校验，并打印当前 `.bit` manifest。这样在没有板子和 GUI 的情况下，仍能尽早发现上板常见问题：工程 part 不是 Nexys4 DDR、关键 `with_delay` 源文件或 IP/XDC 未列入 `.xpr`、顶层 wrapper 改丢、串口/时钟/按钮/LED 管脚约束不匹配、`Hello World!\r\n` ROM 或 UART baud/ready 逻辑回退、没有可烧写 `.bit`，烧写文件和清单 SHA 不一致，或 routed report 中出现 routing/DRC/timing 问题。
+该检查不调用 Vivado，也不重新生成 bitstream；它对工程元数据、文本约束、板级串口关键逻辑和已有实现报告做静态校验，并打印当前 `.bit` manifest。当前输出中的 `vivado_bitstream_stale [WARN]` 是非阻塞风险提示：已有 `.bit` 早于后续修改过的 `device.sv`、`soc_top.sv` 和 `.xpr`，因此真实上板前应在 Vivado 中重新跑 implementation，确保烧写文件包含最新 RTL/工程配置。这样在没有板子和 GUI 的情况下，仍能尽早发现上板常见问题：工程 part 不是 Nexys4 DDR、关键 `with_delay` 源文件或 IP/XDC 未列入 `.xpr`、顶层 wrapper 改丢、串口/时钟/按钮/LED 管脚约束不匹配、`Hello World!\r\n` ROM 或 UART baud/ready 逻辑回退、没有可烧写 `.bit`，烧写文件和清单 SHA 不一致，或 routed report 中出现 routing/DRC/timing 问题。
 
 ### 7.18 Nexys4 board device UART/LED 测试
 

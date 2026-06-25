@@ -16,6 +16,8 @@
 
 当前目录下没有对应 `.bin` 文件，并且本机 PATH 中没有 `vivado` 或 `bootgen`。因此当前可直接用于 Vivado Hardware Manager 烧写 FPGA 的产物是 `.bit`；如果后续需要烧写 flash，需要在安装 Vivado/bootgen 的机器上重新导出 `.bin` 或 `.mcs`。
 
+注意：当前 `.bit` 的生成时间早于后续修改过的 `device.sv`、`soc_top.sv` 和 `project_1.xpr`。它可用于确认 Vivado 工程已有可烧写产物，但不应作为最终最新版上板结果；真实上板前应在 Vivado 中重新跑 implementation，并再次执行 `make test-labplus-vivado-precheck` 比对新的 manifest。
+
 ## 2. Vivado routed report 状态
 
 `make test-labplus-vivado-precheck` 已检查以下 routed artifacts：
@@ -26,6 +28,7 @@
 - `device.sv` 中的板级 UART 字符串 ROM 固定为 `Hello World!\r\n\0`。
 - `device.sv` 中的板级 UART baud tick 固定为 `BIT_TMR_MAX = 10416`，frame 长度固定为 start + 8 data + stop。
 - `device.sv` 中的 `txData` 只在 UART idle 时装载，`TX_DATA` 写入 ready 由 `tx_ready` gate，避免上板串口一帧中途被新字符覆盖。
+- 当前 `.bit` 旧于部分 Vivado 输入文件时，脚本会输出 `vivado_bitstream_stale [WARN]`，提醒上板前重新实现并生成新的 bitstream。
 - `basys3_top_route_status.rpt` 显示 routing errors 为 0。
 - `basys3_top_drc_routed.rpt` 显示 `Violations found: 0`。
 - `basys3_top_timing_summary_routed.rpt` 显示 WNS 非负，当前解析到并输出的 WNS 为 `0.574 ns`。
