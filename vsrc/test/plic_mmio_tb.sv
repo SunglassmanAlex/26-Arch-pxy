@@ -15,7 +15,10 @@ module plic_mmio_tb
     localparam addr_t PLIC_S_CLAIM = PLIC_BASE + 64'h201004;
     localparam addr_t VIRTIO_BASE = 64'h0000_0000_1000_1000;
     localparam addr_t DMA_ADDR = 64'h0000_0000_8000_2000;
+    localparam addr_t UART_BASE = 64'h0000_0000_1000_0000;
+    localparam addr_t UART_IER_DLM = UART_BASE + 64'h1;
     localparam int VIRTIO_IRQ = 1;
+    localparam int UART_IRQ = 10;
 
     logic clk, reset;
     cbus_req_t oreq;
@@ -106,6 +109,10 @@ module plic_mmio_tb
         cbus_write(addr, MSIZE4, {32'd0, data});
     endtask
 
+    task automatic write8(input addr_t addr, input u8 data);
+        cbus_write(addr, MSIZE1, {56'd0, data});
+    endtask
+
     task automatic write64(input addr_t addr, input word_t data);
         cbus_write(addr, MSIZE8, data);
     endtask
@@ -131,6 +138,10 @@ module plic_mmio_tb
         write64(VIRTIO_BASE + 64'h100, 64'd0);
         write64(VIRTIO_BASE + 64'h108, DMA_ADDR);
         write64(VIRTIO_BASE + 64'h110, 64'd1);
+    endtask
+
+    task automatic trigger_uart_irq();
+        write8(UART_IER_DLM, 8'h02);
     endtask
 
     initial begin
@@ -173,6 +184,38 @@ module plic_mmio_tb
         expect32(PLIC_S_CLAIM, 32'(VIRTIO_IRQ), "plic_s_claim");
         write32(PLIC_S_CLAIM, 32'(VIRTIO_IRQ));
         expect_exint(1'b0, "plic_s_complete");
+
+        write32(PLIC_BASE + 64'(VIRTIO_IRQ * 4), 32'd3);
+        write32(PLIC_BASE + 64'(UART_IRQ * 4), 32'd7);
+        write32(PLIC_M_ENABLE, 32'((1 << VIRTIO_IRQ) | (1 << UART_IRQ)));
+        write32(PLIC_M_THRESHOLD, 32'd0);
+        trigger_virtio_irq();
+        trigger_uart_irq();
+        expect32(
+            PLIC_PENDING,
+            32'((1 << VIRTIO_IRQ) | (1 << UART_IRQ)),
+            "plic_multi_pending"
+        );
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_multi_claim_high_priority_uart");
+        expect32(PLIC_PENDING, 32'(1 << VIRTIO_IRQ), "plic_multi_claim_leaves_virtio");
+        expect32(PLIC_M_CLAIM, 32'(VIRTIO_IRQ), "plic_multi_claim_remaining_virtio");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ));
+        write32(PLIC_M_CLAIM, 32'(VIRTIO_IRQ));
+        expect_exint(1'b0, "plic_multi_complete");
+
+        write32(PLIC_BASE + 64'(UART_IRQ * 4), 32'd3);
+        trigger_virtio_irq();
+        trigger_uart_irq();
+        expect32(
+            PLIC_PENDING,
+            32'((1 << VIRTIO_IRQ) | (1 << UART_IRQ)),
+            "plic_equal_priority_pending"
+        );
+        expect32(PLIC_M_CLAIM, 32'(VIRTIO_IRQ), "plic_equal_priority_claim_low_id");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_equal_priority_claim_next_id");
+        write32(PLIC_M_CLAIM, 32'(VIRTIO_IRQ));
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ));
+        expect_exint(1'b0, "plic_equal_priority_complete");
 
         $display("PLIC MMIO directed tests passed.");
         $finish;

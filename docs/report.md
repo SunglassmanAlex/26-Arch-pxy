@@ -28,7 +28,7 @@
 - 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
 - 新增仿真侧 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器、`ConfigGeneration` 和 virtio-blk config 字段，提供包含 `SIZE_MAX/SEG_MAX/BLK_SIZE/FLUSH` 的 feature negotiation，提供同步 512B sector 读写扩展，支持 `Status=0` reset、单 queue 的 descriptor/avail/used ring、indirect descriptor、一次 `QueueNotify` drain 多个 pending avail entry、event idx 中断抑制/触发、`VIRTIO_BLK_T_FLUSH` status-only 请求，以及 xv6 风格不协商 event idx 时的普通 avail flags 中断控制，并支持 `+simple_blk_image=...` 从二进制镜像初始化 disk。
 - 新增仿真侧 CLINT 地址兼容：`SimMemoryWithVirtio` 将 QEMU/xv6 `0x0200...` 的 `msip/mtimecmp/mtime` 地址映射到课程框架 `0x3800...` 地址。
-- 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1。
+- 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1、UART 事件接到 PLIC source 10。
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear 和 LSR overrun，并将 UART interrupt 接到 PLIC source 10。
 - 新增 MMU page fault 定向单元测试，覆盖 instruction/load/store fault 和正常 load 翻译路径。
 - 新增 S 态中断定向测试，覆盖 delegated STIP 从硬件 `trint` 进入 S trap 的路径。
@@ -401,7 +401,7 @@ STREAM Copy/Scale/Add/Triad: 19.2 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/SimTop.sv`
   - 将仿真 UART TX/RX 端口接到 difftest 顶层 `io_uart_out_valid/io_uart_out_ch/io_uart_in_*`。
 - `vsrc/test/plic_mmio_tb.sv`
-  - 新增 PLIC MMIO 定向测试，覆盖 priority、pending、M/S enable、M/S threshold、claim/complete，以及 virtio source 1 中断注入。
+  - 新增 PLIC MMIO 定向测试，覆盖 priority、pending、M/S enable、M/S threshold、claim/complete、virtio source 1 中断注入，以及 virtio/UART 多源同时 pending 时的高优先级 claim 和同优先级低 source id 优先仲裁。
 - `vsrc/test/uart_mmio_tb.sv`
   - 新增 UART MMIO 定向测试，覆盖 xv6 常用初始化路径、TX 输出、RX ready、RBR FIFO 顺序读取、FCR trigger/clear、overrun、THRE interrupt、RX FIFO timeout 和 PLIC source 10 claim。
 - `vsrc/test/clint_alias_tb.sv`
@@ -638,10 +638,19 @@ plic_s_threshold_blocks_irq [OK]
 plic_s_threshold_allows_irq [OK]
 plic_s_claim [OK]
 plic_s_complete [OK]
+plic_multi_pending [OK]
+plic_multi_claim_high_priority_uart [OK]
+plic_multi_claim_leaves_virtio [OK]
+plic_multi_claim_remaining_virtio [OK]
+plic_multi_complete [OK]
+plic_equal_priority_pending [OK]
+plic_equal_priority_claim_low_id [OK]
+plic_equal_priority_claim_next_id [OK]
+plic_equal_priority_complete [OK]
 PLIC MMIO directed tests passed.
 ```
 
-该测试直接实例化 `SimMemoryWithVirtio`，先配置 PLIC source 1 priority、M/S enable 和 threshold，再通过 simple virtio block 命令完成事件置位 pending，验证 M context 和 S context 的 claim/complete 行为。
+该测试直接实例化 `SimMemoryWithVirtio`，先配置 PLIC source 1 priority、M/S enable 和 threshold，再通过 simple virtio block 命令完成事件置位 pending，验证 M context 和 S context 的 claim/complete 行为。随后同时触发 virtio source 1 和 UART source 10，验证不同 priority 时优先 claim 高 priority source；当二者 priority 相同时，验证 PLIC 返回更低的 source id，并能继续 claim 剩余 pending source。
 
 ### 7.13 UART MMIO 定向测试
 
