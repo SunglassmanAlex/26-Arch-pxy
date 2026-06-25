@@ -29,6 +29,13 @@ module SimMemoryWithVirtio
     localparam int PLIC_VIRTIO_SOURCE = 1;
     localparam int PLIC_UART_SOURCE = 10;
 
+    localparam addr_t CLINT_LEGACY_MSIP     = 64'h0000_0000_3800_0000;
+    localparam addr_t CLINT_LEGACY_MTIMECMP = 64'h0000_0000_3800_4000;
+    localparam addr_t CLINT_LEGACY_MTIME    = 64'h0000_0000_3800_bff8;
+    localparam addr_t CLINT_QEMU_MSIP       = 64'h0000_0000_0200_0000;
+    localparam addr_t CLINT_QEMU_MTIMECMP   = 64'h0000_0000_0200_4000;
+    localparam addr_t CLINT_QEMU_MTIME      = 64'h0000_0000_0200_bff8;
+
     localparam addr_t VIRTIO_BASE = 64'h0000_0000_1000_1000;
     localparam addr_t VIRTIO_MASK = 64'hffff_ffff_ffff_fe00;
     localparam word_t VIRTIO_MAGIC_VERSION = {32'd2, 32'h7472_6976};
@@ -159,6 +166,15 @@ module SimMemoryWithVirtio
 
     function automatic logic is_virtio_addr(input addr_t addr);
         is_virtio_addr = ((addr & VIRTIO_MASK) == VIRTIO_BASE);
+    endfunction
+
+    function automatic addr_t clint_alias_addr(input addr_t addr);
+        case (addr)
+            CLINT_QEMU_MSIP:     clint_alias_addr = CLINT_LEGACY_MSIP;
+            CLINT_QEMU_MTIMECMP: clint_alias_addr = CLINT_LEGACY_MTIMECMP;
+            CLINT_QEMU_MTIME:    clint_alias_addr = CLINT_LEGACY_MTIME;
+            default:             clint_alias_addr = addr;
+        endcase
     endfunction
 
     function automatic logic is_local_addr(input addr_t addr);
@@ -1052,7 +1068,15 @@ module SimMemoryWithVirtio
     assign plic_irq_m = (plic_best_source(1'b0) != 0);
     assign plic_irq_s = (plic_best_source(1'b1) != 0);
 
-    assign ram_req = (oreq.valid && is_local_addr(oreq.addr)) ? '0 : oreq;
+    always_comb begin
+        if (oreq.valid && is_local_addr(oreq.addr)) begin
+            ram_req = '0;
+        end
+        else begin
+            ram_req = oreq;
+            ram_req.addr = clint_alias_addr(oreq.addr);
+        end
+    end
 
     always_comb begin
         if (oreq.valid && is_uart_addr(oreq.addr)) begin

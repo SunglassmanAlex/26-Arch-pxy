@@ -17,6 +17,7 @@ no_arguments:
 	@echo "  - test-labplus-sinterrupt: Run Lab+ directed S-mode interrupt test"
 	@echo "  - test-labplus-sfence: Run Lab+ directed SFENCE.VMA test"
 	@echo "  - test-labplus-wfi: Run Lab+ directed WFI test"
+	@echo "  - test-labplus-clint: Run Lab+ directed CLINT alias test"
 	@echo "  - test-labplus-plic: Run Lab+ directed PLIC MMIO test"
 	@echo "  - test-labplus-uart: Run Lab+ directed UART MMIO test"
 	@echo "  - test-labplus-virtio: Run Lab+ directed simple virtio block test"
@@ -116,6 +117,18 @@ test-labplus-wfi:
 	  -Mdir build/wfi -o wfi_tb \
 	  vsrc/test/difftest_stubs.sv vsrc/test/wfi_tb.sv
 	./build/wfi/wfi_tb
+
+test-labplus-clint:
+	rm -rf build/clint-alias
+	verilator --binary --timing --top-module clint_alias_tb \
+	  +define+VERILATOR=1 +define+RANDOMIZE_DELAY=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/clint-alias -o clint_alias_tb \
+	  difftest/src/test/vsrc/common/ram.v \
+	  difftest/src/test/vsrc/common/ram.sv \
+	  vsrc/util/SimMemoryWithVirtio.sv \
+	  vsrc/test/clint_alias_tb.sv \
+	  vsrc/test/ram_dpi_stubs.cpp
+	./build/clint-alias/clint_alias_tb
 
 test-labplus-plic:
 	rm -rf build/plic-mmio
