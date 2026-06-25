@@ -12,6 +12,7 @@ module uart_mmio_tb
     localparam addr_t UART_LCR = UART_BASE + 64'h3;
     localparam addr_t UART_MCR = UART_BASE + 64'h4;
     localparam addr_t UART_LSR = UART_BASE + 64'h5;
+    localparam addr_t UART_MSR = UART_BASE + 64'h6;
     localparam addr_t UART_SCR = UART_BASE + 64'h7;
     localparam addr_t PLIC_BASE = 64'h0000_0000_0c00_0000;
     localparam addr_t PLIC_PENDING = PLIC_BASE + 64'h1000;
@@ -328,6 +329,18 @@ module uart_mmio_tb
         expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_line_errors_claim");
         expect_exint(1'b0, "plic_uart_line_errors_claim_clears_exint");
         write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_line_errors_complete");
+
+        write8(UART_IER_DLM, 8'h08, 1'b0, 8'd0, "uart_ier_enable_modem");
+        expect8(UART_MSR, 8'h00, "uart_msr_reset");
+        write8(UART_MCR, 8'h1b, 1'b0, 8'd0, "uart_mcr_loopback_set_lines");
+        expect8(UART_IIR_FCR, 8'h00, "uart_iir_modem_status_pending");
+        expect_exint(1'b1, "plic_uart_modem_exint");
+        expect8(UART_MSR, 8'hbb, "uart_msr_loopback_delta");
+        expect8(UART_MSR, 8'hb0, "uart_msr_delta_cleared");
+        expect8(UART_IIR_FCR, 8'h01, "uart_iir_modem_cleared");
+        expect32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_modem_claim");
+        expect_exint(1'b0, "plic_uart_modem_claim_clears_exint");
+        write32(PLIC_M_CLAIM, 32'(UART_IRQ), "plic_uart_modem_complete");
 
         write8(UART_IER_DLM, 8'h02, 1'b0, 8'd0, "uart_ier_enable_thre");
         expect_exint(1'b1, "plic_uart_thre_exint");

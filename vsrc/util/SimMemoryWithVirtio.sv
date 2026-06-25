@@ -108,10 +108,11 @@ module SimMemoryWithVirtio
     logic uart_rx_valid, uart_rx_full;
     logic uart_rx_pop_req, uart_rx_pop_valid, uart_rx_push_req, uart_rx_overrun_req;
     logic uart_lsr_overrun, uart_lsr_parity, uart_lsr_framing, uart_lsr_break;
-    logic uart_lsr_line_error, uart_lsr_read_req, uart_iir_read_req;
+    logic uart_lsr_line_error, uart_lsr_read_req, uart_iir_read_req, uart_msr_read_req;
+    logic [3:0] uart_msr_delta;
     logic uart_rx_irq_active, uart_rx_irq_next_active, uart_rx_timeout_irq_active;
     logic uart_rx_timeout_pending, uart_rx_fifo_activity;
-    logic uart_thr_irq_pending, uart_iir_reports_thre;
+    logic uart_thr_irq_pending, uart_iir_reports_thre, uart_iir_reports_modem;
 
     RAMHelper2 ram(
         .clk(clk),
@@ -167,6 +168,23 @@ module SimMemoryWithVirtio
     assign uart_iir_reports_thre = uart_thr_irq_pending &&
         !(uart_lsr_line_error && uart_ier[2]) && !uart_rx_irq_active &&
         !uart_rx_timeout_irq_active;
+    assign uart_iir_reports_modem = uart_ier[3] && (uart_msr_delta != 4'd0);
+
+    function automatic logic [3:0] uart_msr_current_for(input u8 mcr);
+        uart_msr_current_for = mcr[4] ? {mcr[3], mcr[2], mcr[0], mcr[1]} : 4'd0;
+    endfunction
+
+    function automatic logic [3:0] uart_msr_delta_for(
+        input logic [3:0] old_status,
+        input logic [3:0] new_status
+    );
+        begin
+            uart_msr_delta_for[0] = old_status[0] ^ new_status[0];
+            uart_msr_delta_for[1] = old_status[1] ^ new_status[1];
+            uart_msr_delta_for[2] = old_status[2] && !new_status[2];
+            uart_msr_delta_for[3] = old_status[3] ^ new_status[3];
+        end
+    endfunction
 
     function automatic logic is_uart_addr(input addr_t addr);
         is_uart_addr = (addr >= UART_BASE) && (addr < UART_END);
@@ -320,14 +338,15 @@ module SimMemoryWithVirtio
                 3'h2: uart_reg_read_byte = (uart_lsr_line_error && uart_ier[2]) ? 8'h06 :
                     (uart_rx_irq_active ? 8'h04 :
                     (uart_rx_timeout_irq_active ? 8'h0c :
-                    (uart_thr_irq_pending ? 8'h02 : 8'h01)));
+                    (uart_thr_irq_pending ? 8'h02 :
+                    (uart_iir_reports_modem ? 8'h00 : 8'h01))));
                 3'h3: uart_reg_read_byte = uart_lcr;
                 3'h4: uart_reg_read_byte = uart_mcr;
                 3'h5: uart_reg_read_byte = {
                     uart_lsr_line_error, 2'b11, uart_lsr_break, uart_lsr_framing,
                     uart_lsr_parity, uart_lsr_overrun, uart_rx_valid
                 };
-                3'h6: uart_reg_read_byte = 8'd0;
+                3'h6: uart_reg_read_byte = {uart_msr_current_for(uart_mcr), uart_msr_delta};
                 3'h7: uart_reg_read_byte = uart_scr;
                 default: uart_reg_read_byte = 8'd0;
             endcase
@@ -379,7 +398,8 @@ module SimMemoryWithVirtio
                         end
                         if ((data[0] && uart_rx_threshold_met(uart_rx_count)) ||
                             (data[0] && uart_rx_timeout_pending && uart_rx_valid) ||
-                            (data[2] && uart_lsr_line_error)) begin
+                            (data[2] && uart_lsr_line_error) ||
+                            (data[3] && (uart_msr_delta != 4'd0))) begin
                             plic_pending[PLIC_UART_SOURCE] <= 1'b1;
                         end
                     end
@@ -403,7 +423,21 @@ module SimMemoryWithVirtio
                     end
                 end
                 3'h3: uart_lcr <= data;
-                3'h4: uart_mcr <= data;
+                3'h4: begin
+                    logic [3:0] old_modem_status;
+                    logic [3:0] new_modem_status;
+                    logic [3:0] modem_delta;
+                    old_modem_status = uart_msr_current_for(uart_mcr);
+                    new_modem_status = uart_msr_current_for(data);
+                    modem_delta = uart_msr_delta_for(old_modem_status, new_modem_status);
+                    uart_mcr <= data;
+                    if (modem_delta != 4'd0) begin
+                        uart_msr_delta <= uart_msr_delta | modem_delta;
+                        if (uart_ier[3]) begin
+                            plic_pending[PLIC_UART_SOURCE] <= 1'b1;
+                        end
+                    end
+                end
                 3'h7: uart_scr <= data;
                 default: begin end
             endcase
@@ -477,6 +511,22 @@ module SimMemoryWithVirtio
         end
     endfunction
 
+    function automatic logic uart_read_touches_msr(input addr_t addr, input msize_t size);
+        addr_t aligned_addr;
+        strobe_t read_mask;
+        begin
+            aligned_addr = {addr[63:3], 3'b000};
+            read_mask = size_strobe(size, addr[2:0]);
+            uart_read_touches_msr = 1'b0;
+            for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+                if (read_mask[byte_idx] &&
+                    (((aligned_addr + 64'(byte_idx) - UART_BASE) & 64'h7) == 64'h6)) begin
+                    uart_read_touches_msr = 1'b1;
+                end
+            end
+        end
+    endfunction
+
     assign uart_rx_pop_req = oreq.valid && is_uart_addr(oreq.addr) &&
         !oreq.is_write && uart_read_pops_rx(oreq.addr, oreq.size);
     assign uart_rx_pop_valid = uart_rx_pop_req && uart_rx_valid;
@@ -484,6 +534,8 @@ module SimMemoryWithVirtio
         !oreq.is_write && uart_read_touches_lsr(oreq.addr, oreq.size);
     assign uart_iir_read_req = oreq.valid && is_uart_addr(oreq.addr) &&
         !oreq.is_write && uart_read_touches_iir(oreq.addr, oreq.size);
+    assign uart_msr_read_req = oreq.valid && is_uart_addr(oreq.addr) &&
+        !oreq.is_write && uart_read_touches_msr(oreq.addr, oreq.size);
 
     function automatic u32 plic_pending_word();
         plic_pending_word = '0;
@@ -1225,6 +1277,7 @@ module SimMemoryWithVirtio
             uart_lsr_parity <= 1'b0;
             uart_lsr_framing <= 1'b0;
             uart_lsr_break <= 1'b0;
+            uart_msr_delta <= 4'd0;
             uart_thr_irq_pending <= 1'b0;
             for (int source_idx = 0; source_idx <= PLIC_SOURCES; source_idx += 1) begin
                 plic_priority[source_idx] <= 64'd0;
@@ -1249,6 +1302,9 @@ module SimMemoryWithVirtio
             end
             if (uart_iir_read_req && uart_iir_reports_thre) begin
                 uart_thr_irq_pending <= 1'b0;
+            end
+            if (uart_msr_read_req) begin
+                uart_msr_delta <= 4'd0;
             end
             if (uart_rx_pop_valid) begin
                 uart_rx_head <= uart_rx_head + 1'b1;
