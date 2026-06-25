@@ -26,6 +26,14 @@ make vivado-nexys4-bitstream
 
 该目标会调用 `tools/rebuild_nexys4_bitstream.tcl` 打开当前工程，重新运行 `synth_1` 和 `impl_1 -to_step write_bitstream`。如需调整 Vivado 并行度，可使用 `VIVADO_JOBS=16 make vivado-nexys4-bitstream`。
 
+拿到实体板后，可使用 batch 烧写入口：
+
+```bash
+make vivado-nexys4-program
+```
+
+默认烧写 `project_1.runs/impl_1/basys3_top.bit`。如需指定文件或硬件目标，可使用 `BITSTREAM=/path/to/file.bit make vivado-nexys4-program` 或 `HW_TARGET='*/xilinx_tcf/Digilent/*' make vivado-nexys4-program`。
+
 ## 2. Vivado routed report 状态
 
 `make test-labplus-vivado-precheck` 已检查以下 routed artifacts：
@@ -128,12 +136,13 @@ xv6 platform smoke test passed.
 ## 6. 拿到板子后的人工步骤
 
 1. 用 Vivado 打开 `vivado/test-cpu/project/project_1.xpr`。
-2. 连接 Nexys4 DDR，通过 Hardware Manager program device。
-3. 选择 `project_1.runs/impl_1/basys3_top.bit`。
-4. 打开 USB UART 对应串口，设置为 `9600 8N1`。
-5. 按 `BTNC` reset。
-6. 观察 `led[3:0]` 是否在程序 finish 后全部点亮。
-7. 观察串口是否输出 `Hello World!` 或当前测试程序的输出。
+2. 如果需要最新 RTL，先运行 `make vivado-nexys4-bitstream` 重建 `.bit`。
+3. 连接 Nexys4 DDR，通过 Hardware Manager program device，或直接运行 `make vivado-nexys4-program`。
+4. 选择 `project_1.runs/impl_1/basys3_top.bit`。
+5. 打开 USB UART 对应串口，设置为 `9600 8N1`。
+6. 按 `BTNC` reset。
+7. 观察 `led[3:0]` 是否在程序 finish 后全部点亮。
+8. 观察串口是否输出 `Hello World!` 或当前测试程序的输出。
 
 如果没有串口输出，优先检查：
 

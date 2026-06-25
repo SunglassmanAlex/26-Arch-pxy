@@ -26,6 +26,7 @@ no_arguments:
 	@echo "  - test-labplus-board-device: Run Lab+ Nexys4 board device UART/LED test"
 	@echo "  - test-labplus-preboard: Run Lab+ non-Vivado pre-board regression"
 	@echo "  - vivado-nexys4-bitstream: Rebuild Nexys4 DDR bitstream with Vivado"
+	@echo "  - vivado-nexys4-program: Program Nexys4 DDR bitstream with Vivado Hardware Manager"
 
 init:
 	git submodule update --init --recursive
@@ -214,6 +215,13 @@ vivado-nexys4-bitstream:
 	fi
 	vivado -mode batch -source tools/rebuild_nexys4_bitstream.tcl
 
+vivado-nexys4-program:
+	@if ! command -v vivado >/dev/null 2>&1; then \
+		echo "vivado not found in PATH; run this target on a machine with Vivado installed"; \
+		exit 127; \
+	fi
+	vivado -mode batch -source tools/program_nexys4_bitstream.tcl
+
 clean:
 	rm -rf build
 
@@ -221,4 +229,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device vivado-nexys4-bitstream
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device vivado-nexys4-bitstream vivado-nexys4-program
