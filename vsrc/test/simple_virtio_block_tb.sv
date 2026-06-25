@@ -458,6 +458,22 @@ module simple_virtio_block_tb
         expect_read32(VIRTIO_BASE + 64'h10c, 32'd1, "virtio_config_seg_max");
         expect_read32(VIRTIO_BASE + 64'h114, 32'd512, "virtio_config_blk_size");
         expect_read32(VIRTIO_BASE + 64'h0fc, 32'd0, "virtio_config_generation_initial");
+        cbus_write32(VIRTIO_BASE + 64'h030, 32'd1);
+        expect_read32(VIRTIO_BASE + 64'h034, 32'd0, "virtio_queue1_num_max_zero");
+        cbus_write32(VIRTIO_BASE + 64'h038, 32'd8);
+        cbus_write32(VIRTIO_BASE + 64'h044, 32'd1);
+        cbus_write32(VIRTIO_BASE + 64'h080, 32'h1234_5678);
+        cbus_write32(VIRTIO_BASE + 64'h090, 32'h8765_4321);
+        cbus_write32(VIRTIO_BASE + 64'h0a0, 32'hfeed_cafe);
+        expect_read32(VIRTIO_BASE + 64'h038, 32'd0, "virtio_queue1_num_ignored");
+        expect_read32(VIRTIO_BASE + 64'h044, 32'd0, "virtio_queue1_ready_ignored");
+        expect_read32(VIRTIO_BASE + 64'h080, 32'd0, "virtio_queue1_desc_ignored");
+        cbus_write32(VIRTIO_BASE + 64'h050, 32'd1);
+        expect_read32(VIRTIO_BASE + 64'h060, 32'd0, "virtio_queue1_notify_ignored");
+        cbus_write32(VIRTIO_BASE + 64'h030, 32'd0);
+        expect_read32(VIRTIO_BASE + 64'h038, 32'd0, "virtio_queue0_num_unmodified");
+        expect_read32(VIRTIO_BASE + 64'h044, 32'd0, "virtio_queue0_ready_unmodified");
+        expect_read32(VIRTIO_BASE + 64'h080, 32'd0, "virtio_queue0_desc_unmodified");
 
         for (int word_idx = 0; word_idx < 64; word_idx += 1) begin
             ram_write_word(DMA_ADDR + 64'(word_idx * 8), 64'd0);

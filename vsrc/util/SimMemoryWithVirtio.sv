@@ -1038,16 +1038,16 @@ module SimMemoryWithVirtio
                 64'h024: virtio_reg32_read = virt_driver_features_sel;
                 64'h030: virtio_reg32_read = virt_queue_sel;
                 64'h034: virtio_reg32_read = (virt_queue_sel == 32'd0) ? u32'(VIRTQ_NUM_MAX) : 32'd0;
-                64'h038: virtio_reg32_read = virt_queue_num;
-                64'h044: virtio_reg32_read = virt_queue_ready;
+                64'h038: virtio_reg32_read = (virt_queue_sel == 32'd0) ? virt_queue_num : 32'd0;
+                64'h044: virtio_reg32_read = (virt_queue_sel == 32'd0) ? virt_queue_ready : 32'd0;
                 64'h060: virtio_reg32_read = virt_interrupt_status;
                 64'h070: virtio_reg32_read = virt_status;
-                64'h080: virtio_reg32_read = virt_queue_desc[31:0];
-                64'h084: virtio_reg32_read = virt_queue_desc[63:32];
-                64'h090: virtio_reg32_read = virt_queue_driver[31:0];
-                64'h094: virtio_reg32_read = virt_queue_driver[63:32];
-                64'h0a0: virtio_reg32_read = virt_queue_device[31:0];
-                64'h0a4: virtio_reg32_read = virt_queue_device[63:32];
+                64'h080: virtio_reg32_read = (virt_queue_sel == 32'd0) ? virt_queue_desc[31:0] : 32'd0;
+                64'h084: virtio_reg32_read = (virt_queue_sel == 32'd0) ? virt_queue_desc[63:32] : 32'd0;
+                64'h090: virtio_reg32_read = (virt_queue_sel == 32'd0) ? virt_queue_driver[31:0] : 32'd0;
+                64'h094: virtio_reg32_read = (virt_queue_sel == 32'd0) ? virt_queue_driver[63:32] : 32'd0;
+                64'h0a0: virtio_reg32_read = (virt_queue_sel == 32'd0) ? virt_queue_device[31:0] : 32'd0;
+                64'h0a4: virtio_reg32_read = (virt_queue_sel == 32'd0) ? virt_queue_device[63:32] : 32'd0;
                 64'h0fc: virtio_reg32_read = virt_config_generation;
                 64'h100: virtio_reg32_read = u32'(SIMPLE_BLK_SECTORS);
                 64'h104: virtio_reg32_read = 32'd0;
@@ -1119,8 +1119,16 @@ module SimMemoryWithVirtio
                 end
                 64'h024: virt_driver_features_sel <= data;
                 64'h030: virt_queue_sel <= data;
-                64'h038: virt_queue_num <= data;
-                64'h044: virt_queue_ready <= data;
+                64'h038: begin
+                    if (virt_queue_sel == 32'd0) begin
+                        virt_queue_num <= data;
+                    end
+                end
+                64'h044: begin
+                    if (virt_queue_sel == 32'd0) begin
+                        virt_queue_ready <= data;
+                    end
+                end
                 64'h050: run_virtqueue_command(data);
                 64'h064: begin
                     cleared_interrupt_status = virt_interrupt_status & data;
@@ -1157,12 +1165,36 @@ module SimMemoryWithVirtio
                             (data & ~VIRTIO_STATUS_FEATURES_OK) : data;
                     end
                 end
-                64'h080: virt_queue_desc[31:0] <= data;
-                64'h084: virt_queue_desc[63:32] <= data;
-                64'h090: virt_queue_driver[31:0] <= data;
-                64'h094: virt_queue_driver[63:32] <= data;
-                64'h0a0: virt_queue_device[31:0] <= data;
-                64'h0a4: virt_queue_device[63:32] <= data;
+                64'h080: begin
+                    if (virt_queue_sel == 32'd0) begin
+                        virt_queue_desc[31:0] <= data;
+                    end
+                end
+                64'h084: begin
+                    if (virt_queue_sel == 32'd0) begin
+                        virt_queue_desc[63:32] <= data;
+                    end
+                end
+                64'h090: begin
+                    if (virt_queue_sel == 32'd0) begin
+                        virt_queue_driver[31:0] <= data;
+                    end
+                end
+                64'h094: begin
+                    if (virt_queue_sel == 32'd0) begin
+                        virt_queue_driver[63:32] <= data;
+                    end
+                end
+                64'h0a0: begin
+                    if (virt_queue_sel == 32'd0) begin
+                        virt_queue_device[31:0] <= data;
+                    end
+                end
+                64'h0a4: begin
+                    if (virt_queue_sel == 32'd0) begin
+                        virt_queue_device[63:32] <= data;
+                    end
+                end
                 64'h100: blk_sector[31:0] <= data;
                 64'h104: blk_sector[63:32] <= data;
                 64'h108: blk_mem_addr[31:0] <= data;
