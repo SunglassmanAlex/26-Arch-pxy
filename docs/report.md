@@ -36,6 +36,7 @@
 - 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1、UART 事件接到 PLIC source 10。
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、IIR FIFO-enabled bits、LSR overrun/parity/framing/break、break-only line-status 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
 - 新增 xv6/QEMU platform smoke 集成测试：在同一个 `SimMemoryWithVirtio` 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、标准 virtqueue read/write/readback 后 claim virtio 中断、virtio/uart 多源优先级仲裁和 complete 清中断路径。
+- 新增 xv6 boot 运行入口：`make test-labplus-xv6boot` 支持通过 `XV6_KERNEL=/path/to/kernel.bin` 加载 raw kernel，并可通过 `XV6_FS=/path/to/fs.img` 把文件系统镜像注入 `build/xv6/fs.img` 作为 virtio block 初始磁盘。
 - 新增 Vivado 上板前静态检查：解析 `project_1.xpr`、Nexys4 DDR XDC 和顶层 wrapper，确认 part、工程文件、约束端口管脚和 `basys3_top` 兼容包装没有跑偏；同时检查已有 bitstream、route status、routed DRC 和 timing summary，确认 route errors=0、DRC violations=0，并在 WNS 或 timing constraints 未收敛时给出 warning。
 - 扩展 Vivado/preboard 检查：自动打印当前 `.bit` 的 path、size、mtime、SHA256、`.bin` 缺失提示和 timing WNS，提示 `.bit` 是否旧于 Vivado 输入文件，并固化板级 UART 的 `Hello World!\r\n\0` ROM、9600 baud tick、10 bit frame、`txData` idle guard、TX ready gate 和 BRAM read response 一拍清除，便于上板时比对烧写文件并提前发现串口/BRAM 握手回归。
 - 新增 Vivado bitstream 重建入口：提供 `tools/rebuild_nexys4_bitstream.tcl` 和 `make vivado-nexys4-bitstream`，用于在安装 Vivado 的机器上重新跑 `synth_1/impl_1` 并生成最新 Nexys4 DDR `.bit`。
@@ -60,7 +61,7 @@
 - 新增 CSR machine-id 定向测试，覆盖 `misa` 读取/写忽略、`mvendorid/marchid/mimpid/mhartid` 读取和写只读机器 ID CSR 的 illegal trap。
 - 新增 CSR envcfg 定向测试，覆盖 `mconfigptr/menvcfg/senvcfg` M 态探测、WARL zero 写忽略，以及 S 态访问 `senvcfg`。
 - 新增 AMO.D 定向测试，覆盖 `AMOSWAP.D/AMOADD.D/LR.D/SC.D` 成功路径和无 reservation 的 `SC.D` 失败路径。
-- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
 本次新增通过的核心测试为 atomic extension、AMO.D 定向测试、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、S 态软件中断定向测试、S 态外部中断定向测试、M timer from S-mode 定向测试、timervec SSIP handoff 定向测试、SFENCE.VMA 定向测试、WFI 定向测试、mstatus TSR/TW/TVM 定向测试、CSR counter 定向测试、CSR mcountinhibit 定向测试、CSR machine-id 定向测试、CSR envcfg 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 UART 两行前缀 trace。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
@@ -169,7 +170,7 @@ Lab+ privfull 输出中存在 `Test breakpoint [X]`。反汇编和二进制字�
 
 ### 4.6 xv6 主线部分进展：S-mode 与委托
 
-官方 Lab+ 主 Track 是尝试运行 xv6。当前仓库没有 xv6 镜像或源码，因此本次先补 xv6 boot 的 CPU 前置能力，而不是直接实现磁盘 MMIO。新增内容如下：
+官方 Lab+ 主 Track 是尝试运行 xv6。当前仓库没有 xv6 镜像或源码，因此本次先补 xv6 boot 的 CPU 前置能力和 QEMU virt 平台外设路径。新增内容如下：
 
 - 新增 `PRIV_S=2'b01`，`mret` 可以返回到 S 态，difftest 的 privilege mode 也能看到 S 编码。
 - 新增 `SRET` 解码，S/M 态可执行，返回到 `sstatus.spp` 指定的 U/S 态，并按规范更新 `sstatus.sie/spie/spp`。
@@ -179,7 +180,7 @@ Lab+ privfull 输出中存在 `Test breakpoint [X]`。反汇编和二进制字�
 - 增加 S 级中断 evaluate 框架：当 `mip/sip`、`mie/sie`、`mideleg` 同时打开时，U/S 态可进入 S trap。
 - 增加简化的 CLINT/PLIC 到 S pending 转换：当 `mideleg.SSIP/STIP/SEIP` 对应位打开时，将外部输入 `swint/trint/exint` 同步镜像到 `mip.SSIP/STIP/SEIP`，使 S 态只打开 `sie` 对应位即可接收 supervisor software/timer/external interrupt。
 
-这一部分还不能直接跑完整 xv6，因为仍缺少 virtio/磁盘 MMIO 或替代块设备模型。但它把 xv6 所需的 Supervisor trap 基础路径补上了，并通过现有 Lab5、Lab6 与 Lab+ privfull 回归确认没有破坏原 U/M 行为。
+这一部分把 xv6 所需的 Supervisor trap 基础路径补上了，并通过现有 Lab5、Lab6 与 Lab+ privfull 回归确认没有破坏原 U/M 行为。后续章节继续补充 CLINT、PLIC、16550 UART、virtio block 和 boot target；当前完整 xv6 boot 的剩余阻塞是缺少可直接加载的 raw xv6 kernel/fs 镜像，以及本机 WSL 环境没有 RISC-V 交叉工具链用于现场构建这些镜像。
 
 ### 4.7 MMU page fault 与 PTE 权限检查
 
@@ -466,7 +467,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/difftest_stubs.sv`
   - 为独立 core test 提供空 difftest 模块，避免链接 DPI-C difftest。
 - `vsrc/util/SimMemoryWithVirtio.sv`
-  - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO；将 QEMU/xv6 `0x0200...` CLINT 地址映射到课程框架 `0x3800...` 地址；支持 virtio-blk config 读字段、`ConfigGeneration`、包含 `SIZE_MAX/SEG_MAX/BLK_SIZE/FLUSH/DISCARD/WRITE_ZEROES` 的 feature negotiation、`Status=0` reset、4 条 split queue 的独立 descriptor/avail/used ring、按 queue id 处理 `QueueNotify`、`QueueReset` 单队列重置、indirect descriptor、一次 `QueueNotify` drain 多个 pending avail entry、event idx block read/write 子集、`VIRTIO_BLK_T_FLUSH` status-only 请求、`VIRTIO_BLK_T_DISCARD` no-op 成功请求和 `VIRTIO_BLK_T_WRITE_ZEROES` 清零请求，并支持 `+simple_blk_image=...` 从二进制镜像初始化 simple-block disk。
+  - 新增仿真内存包装器，转发普通 RAM/CLINT 请求并处理 `0x10001000` virtio/simple-block MMIO；将 QEMU/xv6 `0x0200...` CLINT 地址映射到课程框架 `0x3800...` 地址；支持 virtio-blk config 读字段、`ConfigGeneration`、包含 `SIZE_MAX/SEG_MAX/BLK_SIZE/FLUSH/DISCARD/WRITE_ZEROES` 的 feature negotiation、`Status=0` reset、4 条 split queue 的独立 descriptor/avail/used ring、按 queue id 处理 `QueueNotify`、`QueueReset` 单队列重置、indirect descriptor、一次 `QueueNotify` drain 多个 pending avail entry、event idx block read/write 子集、`VIRTIO_BLK_T_FLUSH` status-only 请求、`VIRTIO_BLK_T_DISCARD` no-op 成功请求和 `VIRTIO_BLK_T_WRITE_ZEROES` 清零请求，并支持 `+simple_blk_image=...` 或默认 `build/xv6/fs.img` 从二进制镜像初始化 simple-block disk。
   - 新增 PLIC MMIO 模型，拦截 `0x0c000000` 到 `0x0fffffff`，支持 source priority、pending、M/S enable、threshold、claim/complete。
   - 新增 `0x10000000` 16550 UART MMIO 模型，支持 LCR/DLAB、DLL/DLM、IER、FCR trigger/clear、IIR FIFO-enabled bits、MCR loopback、SCR、LSR overrun/parity/framing/break、break-only line-status、MSR modem-status delta、THR TX 输出、THRE interrupt、RX FIFO timeout、16B RBR RX FIFO 和 RX/THRE/RLS/MS interrupt 到 PLIC source 10。
 - `vsrc/SimTop.sv`
@@ -496,7 +497,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
 - `docs/nexys4_bringup.md`
   - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`test-labplus-xv6boot` 检查 `XV6_KERNEL` raw binary，按需 stage `XV6_FS` 到 `build/xv6/fs.img` 并用 `--no-diff` 启动 emu；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -1309,6 +1310,26 @@ xv6 platform smoke test passed.
 
 在 virtio/disk MMIO 改成 4 条 split queue 后，已重新运行该 smoke 测试，CLINT、PLIC S context、UART、标准 virtqueue read/write/readback、virtio source 和多源 pending 仲裁仍全部通过。
 
+### 7.16.1 xv6 boot 运行入口
+
+运行方式：
+
+```bash
+make test-labplus-xv6boot XV6_KERNEL=/path/to/kernel.bin XV6_FS=/path/to/fs.img
+```
+
+`XV6_KERNEL` 要求是链接到 `0x80000000` 后转换出的 raw binary；如果手上是 xv6 的 ELF `kernel/kernel`，需要先用 RISC-V `objcopy -O binary` 转成 flat binary。`XV6_FS` 是可选文件系统镜像，目标会在运行前复制到 `build/xv6/fs.img`，`SimMemoryWithVirtio` reset 时会自动把它作为 simple/virtio block 的初始磁盘内容；如果没有提供，则仍使用默认 `SBLK` pattern，便于先观察内核早期串口输出。
+
+当前本机仓库中没有 xv6 `kernel.bin/fs.img`，并且 WSL 环境没有 `riscv64-unknown-elf-gcc`、`riscv64-linux-gnu-gcc` 或 `qemu-system-riscv64`。因此该目标目前的本地验证是确认缺少 kernel 时会快速失败，而不会先重编 emu：
+
+```text
+xv6 kernel image not found: ready-to-run/xv6/kernel.bin
+Provide a flat binary with XV6_KERNEL=/path/to/kernel.bin
+Optional disk image: XV6_FS=/path/to/fs.img
+```
+
+这一步把完整 boot 的命令入口和 disk image 注入路径固定下来。后续只要补入真实 xv6 raw kernel 和 fs.img，就可以直接用 `--no-diff` 在当前 difftest memory bus 平台上观察内核启动串口输出。
+
 ### 7.17 Vivado 上板前静态检查
 
 运行：
@@ -1473,8 +1494,10 @@ timing status: constraints not met, usable for bring-up observation but should b
 
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、标准 counter CSR 与 `mcounteren/scounteren` 门控、机器 ID/ISA/envcfg CSR 兼容、AMO.D、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型，以及最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，并补了独立 page fault、S timer/software/external interrupt、M timer from S-mode、timervec SSIP handoff、SFENCE.VMA、WFI、CSR counter、CSR machine-id、CSR envcfg、AMO.D、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。后续如果继续推进 xv6，需要补充：
+本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、标准 counter CSR 与 `mcounteren/scounteren` 门控、机器 ID/ISA/envcfg CSR 兼容、AMO.D、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、mstatus TSR/TW/TVM 限制、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，以及 `test-labplus-xv6boot` raw kernel/fs.img 运行入口，并补了独立 page fault、S timer/software/external interrupt、M timer from S-mode、timervec SSIP handoff、SFENCE.VMA、WFI、mstatus restrict、CSR counter/mcountinhibit/machine-id/envcfg、AMO.D、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。后续如果继续推进 xv6，需要补充：
 
+- 准备真实 xv6 `kernel.bin` raw binary 和 `fs.img`，或在本机安装 RISC-V 交叉工具链后从 xv6 源码构建，然后运行 `make test-labplus-xv6boot XV6_KERNEL=... XV6_FS=...`。
+- 根据 xv6 真实启动串口日志继续补缺失的 CSR、PTE flag、trap corner case 或 virtio/PLIC/UART 行为。
 - 更高级的 virtio block queue 行为、packed queue、动态配置变更通知和更完整的 config 字段。
 - 更完整的 16550 baud timing 和 receiver line-break timing 等细节。
 - 将更多真实设备事件和更细粒度的 virtio 中断状态接入 PLIC source。
@@ -1484,7 +1507,7 @@ timing status: constraints not met, usable for bring-up observation but should b
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、AMO.D、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path、8B 指令行缓冲和 32 项 2-bit BHT 动态分支预测等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、标准 counter CSR 与 `mcounteren/scounteren` 门控、机器 ID/ISA/envcfg CSR 兼容、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S timer/software/external interrupt、M timer from S-mode、timervec SSIP handoff、SFENCE.VMA、WFI、CSR counter、CSR machine-id、CSR envcfg、AMO.D、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。上板调试中先后修复了 UART 自动字符串发送时 `txData` 中途覆盖、`Hello World` 大小写不一致、TX_DATA backpressure 隔字丢失，以及 BRAM read response stale-ready 导致第二行 `R` 后取指错误的问题。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W/LR.D/SC.D` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93020，将 Lab4 周期数从 208529 降到 110572，atomicity 从 372 降到 197。最终 atomicity、Lab1 extra 和 Lab4 已完成动态 BHT 增量快速回归；Lab+ privileged sys-test、S-mode interrupt directed test、S software interrupt directed test、S external interrupt directed test、M timer from S-mode directed test、timervec SSIP directed test、SFENCE.VMA directed test、WFI directed test、CSR counter directed test、CSR machine-id directed test、CSR envcfg directed test、AMO.D directed test、MMU page fault、CLINT/PLIC/UART/virtio/xv6 smoke、Vivado pre-board、Nexys4 board device、`soc_top` board trace、Lab5、Lab6 沿用前序回归结果。
+本次 Lab+ 新增完成了 atomic extension、AMO.D、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path、8B 指令行缓冲和 32 项 2-bit BHT 动态分支预测等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、标准 counter CSR 与 `mcounteren/scounteren/mcountinhibit` 门控、机器 ID/ISA/envcfg CSR 兼容、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、mstatus TSR/TW/TVM 限制、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，以及 `test-labplus-xv6boot` raw kernel/fs.img 运行入口。上板调试中先后修复了 UART 自动字符串发送时 `txData` 中途覆盖、`Hello World` 大小写不一致、TX_DATA backpressure 隔字丢失，以及 BRAM read response stale-ready 导致第二行 `R` 后取指错误的问题。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W/LR.D/SC.D` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93020，将 Lab4 周期数从 208529 降到 110572，atomicity 从 372 降到 197。最终 atomicity、Lab1 extra 和 Lab4 已完成动态 BHT 增量快速回归；Lab+ privileged sys-test、S-mode interrupt directed test、S software/external interrupt directed test、M timer from S-mode directed test、timervec SSIP directed test、SFENCE.VMA directed test、WFI directed test、mstatus restrict directed test、CSR counter/mcountinhibit/machine-id/envcfg directed test、AMO.D directed test、MMU page fault、CLINT/PLIC/UART/virtio/xv6 smoke、xv6boot 缺镜像快速失败检查、Vivado pre-board、Nexys4 board device、`soc_top` board trace、Lab5、Lab6 沿用前序回归结果。
 
 ## 10. AI 使用说明
 

@@ -255,6 +255,7 @@ module SimMemoryWithVirtio
 
     task automatic load_disk_init();
         string image_path;
+        logic image_path_given;
         int image_fd;
         int bytes_read;
         int byte_offset;
@@ -262,11 +263,12 @@ module SimMemoryWithVirtio
             for (int i = 0; i < SIMPLE_BLK_WORDS; i += 1) begin
                 disk_init[i] = simple_blk_default_word(i);
             end
-            if ($value$plusargs("simple_blk_image=%s", image_path)) begin
-                image_fd = $fopen(image_path, "rb");
-                if (image_fd == 0) begin
-                    $fatal(1, "failed to open simple block image: %s", image_path);
-                end
+            image_path_given = $value$plusargs("simple_blk_image=%s", image_path);
+            if (!image_path_given) begin
+                image_path = "build/xv6/fs.img";
+            end
+            image_fd = $fopen(image_path, "rb");
+            if (image_fd != 0) begin
                 bytes_read = $fread(blk_image_bytes, image_fd);
                 $fclose(image_fd);
                 for (int word_idx = 0; word_idx < SIMPLE_BLK_WORDS; word_idx += 1) begin
@@ -279,6 +281,9 @@ module SimMemoryWithVirtio
                 end
                 $display("simple block image loaded: %s (%0d bytes, capacity %0d bytes)",
                     image_path, bytes_read, SIMPLE_BLK_BYTES);
+            end
+            else if (image_path_given) begin
+                $fatal(1, "failed to open simple block image: %s", image_path);
             end
         end
     endtask

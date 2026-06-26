@@ -32,6 +32,7 @@ no_arguments:
 	@echo "  - test-labplus-uart: Run Lab+ directed UART MMIO test"
 	@echo "  - test-labplus-virtio: Run Lab+ directed simple virtio block test"
 	@echo "  - test-labplus-xv6smoke: Run Lab+ xv6 platform MMIO smoke test"
+	@echo "  - test-labplus-xv6boot: Run xv6 kernel image with optional fs.img"
 	@echo "  - test-labplus-vivado-precheck: Run Lab+ Vivado project static pre-board check"
 	@echo "  - test-labplus-board-device: Run Lab+ Nexys4 board device UART/LED test"
 	@echo "  - test-labplus-board-soc-trace: Run Nexys4 soc_top trace simulation"
@@ -65,6 +66,10 @@ emu:
 
 export NOOP_HOME=$(abspath .)
 export NEMU_HOME=$(abspath ./ready-to-run)
+
+XV6_KERNEL ?= ready-to-run/xv6/kernel.bin
+XV6_FS ?= ready-to-run/xv6/fs.img
+XV6_MAX_CYCLES ?= 5000000
 
 sim:
 	rm -rf build
@@ -276,6 +281,24 @@ test-labplus-xv6smoke:
 	  vsrc/test/ram_dpi_stubs.cpp
 	./build/xv6-platform-smoke/xv6_platform_smoke_tb
 
+test-labplus-xv6boot:
+	@if [ ! -f "$(XV6_KERNEL)" ]; then \
+	  echo "xv6 kernel image not found: $(XV6_KERNEL)"; \
+	  echo "Provide a flat binary with XV6_KERNEL=/path/to/kernel.bin"; \
+	  echo "Optional disk image: XV6_FS=/path/to/fs.img"; \
+	  exit 2; \
+	fi
+	$(MAKE) sim
+	@mkdir -p build/xv6
+	@if [ -f "$(XV6_FS)" ]; then \
+	  cp "$(XV6_FS)" build/xv6/fs.img; \
+	  echo "xv6 fs image staged: $(XV6_FS) -> build/xv6/fs.img"; \
+	else \
+	  rm -f build/xv6/fs.img; \
+	  echo "xv6 fs image not found: $(XV6_FS); using default simple-block pattern"; \
+	fi
+	TEST=xv6 ./build/emu --no-diff -i "$(XV6_KERNEL)" -C $(XV6_MAX_CYCLES) $(VOPT)
+
 test-labplus-vivado-precheck:
 	python3 tools/preboard_check.py
 
@@ -351,4 +374,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-mcountinhibit test-labplus-mstatus-restrict test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-ssoftint test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-xv6boot test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-mcountinhibit test-labplus-mstatus-restrict test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-ssoftint test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
