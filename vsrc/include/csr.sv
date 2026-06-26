@@ -8,9 +8,13 @@
 package csr_pkg;
   import common::*;
 
+  parameter u12 CSR_MVENDORID = 12'hf11;
+  parameter u12 CSR_MARCHID = 12'hf12;
+  parameter u12 CSR_MIMPID = 12'hf13;
   parameter u12 CSR_MHARTID = 12'hf14;
   parameter u12 CSR_MIE = 12'h304;
   parameter u12 CSR_MIP = 12'h344;
+  parameter u12 CSR_MISA = 12'h301;
   parameter u12 CSR_MTVEC = 12'h305;
   parameter u12 CSR_MCOUNTEREN = 12'h306;
   parameter u12 CSR_MSTATUS = 12'h300;

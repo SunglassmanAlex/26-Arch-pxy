@@ -39,6 +39,7 @@ module core import common::*;(
 	localparam word_t MIP_S_MASK       = MIP_SSIP_BIT | MIP_STIP_BIT | MIP_SEIP_BIT;
 	localparam word_t MIP_HW_MASK      = MIP_MSIP_BIT | MIP_MTIP_BIT | MIP_MEIP_BIT;
 	localparam word_t COUNTEREN_MASK   = 64'h0000_0000_0000_0007;
+	localparam word_t MISA_VALUE       = 64'h8000_0000_0014_1101; // RV64 + A/I/M/S/U
 	localparam int PMP_ENTRIES = 8;
 	localparam int BP_ENTRIES = 32;
 	localparam int BP_INDEX_BITS = 5;
@@ -494,6 +495,10 @@ module core import common::*;(
 			CSR_MCYCLE:   csr_read = csr_mcycle;
 			CSR_INSTRET,
 			CSR_MINSTRET: csr_read = csr_minstret;
+			CSR_MISA:     csr_read = MISA_VALUE;
+			CSR_MVENDORID,
+			CSR_MARCHID,
+			CSR_MIMPID:   csr_read = 64'd0;
 			CSR_MHARTID:  csr_read = csr_mhartid;
 			CSR_MEDELEG:  csr_read = csr_medeleg;
 			CSR_MIDELEG:  csr_read = csr_mideleg;
@@ -518,7 +523,8 @@ module core import common::*;(
 			CSR_MSCRATCH, CSR_SSCRATCH, CSR_MEPC, CSR_SEPC,
 			CSR_MCAUSE, CSR_SCAUSE, CSR_MTVAL, CSR_STVAL,
 			CSR_SATP, CSR_CYCLE, CSR_TIME, CSR_INSTRET,
-			CSR_MCYCLE, CSR_MINSTRET, CSR_MHARTID,
+			CSR_MCYCLE, CSR_MINSTRET, CSR_MISA, CSR_MVENDORID,
+			CSR_MARCHID, CSR_MIMPID, CSR_MHARTID,
 			CSR_MEDELEG, CSR_MIDELEG, CSR_PMPADDR0, CSR_PMPADDR1,
 			CSR_PMPADDR2, CSR_PMPADDR3, CSR_PMPADDR4, CSR_PMPADDR5,
 			CSR_PMPADDR6, CSR_PMPADDR7, CSR_PMPCFG0:
