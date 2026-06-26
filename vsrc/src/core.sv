@@ -38,6 +38,7 @@ module core import common::*;(
 	localparam word_t MIP_MEIP_BIT     = 64'h0000_0000_0000_0800;
 	localparam word_t MIP_S_MASK       = MIP_SSIP_BIT | MIP_STIP_BIT | MIP_SEIP_BIT;
 	localparam word_t MIP_HW_MASK      = MIP_MSIP_BIT | MIP_MTIP_BIT | MIP_MEIP_BIT;
+	localparam word_t COUNTEREN_MASK   = 64'h0000_0000_0000_0007;
 	localparam int PMP_ENTRIES = 8;
 	localparam int BP_ENTRIES = 32;
 	localparam int BP_INDEX_BITS = 5;
@@ -89,6 +90,7 @@ module core import common::*;(
 	word_t csr_mcause, csr_mtval, csr_mepc, csr_mcycle, csr_minstret, csr_satp;
 	word_t csr_stvec, csr_sscratch, csr_sepc, csr_scause, csr_stval;
 	word_t csr_medeleg, csr_mideleg, csr_pmpcfg0;
+	word_t csr_mcounteren, csr_scounteren;
 	word_t csr_pmpaddr[PMP_ENTRIES];
 	word_t csr_mhartid;
 	word_t mip_value;
@@ -476,6 +478,8 @@ module core import common::*;(
 			CSR_SIP:      csr_read = mip_value & MIP_S_MASK;
 			CSR_MIE:      csr_read = csr_mie;
 			CSR_SIE:      csr_read = csr_mie & MIP_S_MASK;
+			CSR_MCOUNTEREN: csr_read = csr_mcounteren;
+			CSR_SCOUNTEREN: csr_read = csr_scounteren;
 			CSR_MSCRATCH: csr_read = csr_mscratch;
 			CSR_SSCRATCH: csr_read = csr_sscratch;
 			CSR_MEPC:     csr_read = csr_mepc;
@@ -510,6 +514,7 @@ module core import common::*;(
 		unique case (id)
 			CSR_MSTATUS, CSR_SSTATUS, CSR_MTVEC, CSR_STVEC,
 			CSR_MIP, CSR_SIP, CSR_MIE, CSR_SIE,
+			CSR_MCOUNTEREN, CSR_SCOUNTEREN,
 			CSR_MSCRATCH, CSR_SSCRATCH, CSR_MEPC, CSR_SEPC,
 			CSR_MCAUSE, CSR_SCAUSE, CSR_MTVAL, CSR_STVAL,
 			CSR_SATP, CSR_CYCLE, CSR_TIME, CSR_INSTRET,
@@ -521,6 +526,34 @@ module core import common::*;(
 			default:
 				csr_supported = 1'b0;
 		endcase
+	endfunction
+
+	function automatic logic counter_csr_access_allowed(input csr_addr_t id, input logic [1:0] mode);
+		logic [5:0] counter_bit;
+		logic is_counter;
+		begin
+			is_counter = 1'b1;
+			unique case (id)
+				CSR_CYCLE:   counter_bit = 6'd0;
+				CSR_TIME:    counter_bit = 6'd1;
+				CSR_INSTRET: counter_bit = 6'd2;
+				default: begin
+					is_counter = 1'b0;
+					counter_bit = 6'd0;
+				end
+			endcase
+
+			if (!is_counter || (mode == PRIV_M)) begin
+				counter_csr_access_allowed = 1'b1;
+			end
+			else if (mode == PRIV_S) begin
+				counter_csr_access_allowed = csr_mcounteren[counter_bit];
+			end
+			else begin
+				counter_csr_access_allowed =
+					csr_mcounteren[counter_bit] && csr_scounteren[counter_bit];
+			end
+		end
 	endfunction
 
 	function automatic logic addr_misaligned(input addr_t addr, input msize_t size);
@@ -1196,7 +1229,8 @@ module core import common::*;(
 
 	assign id_csr_legal = id_is_csr && csr_supported(id_csr_addr) &&
 		(current_priv >= id_csr_addr[9:8]) &&
-		!((id_csr_addr[11:10] == 2'b11) && id_csr_wen);
+		!((id_csr_addr[11:10] == 2'b11) && id_csr_wen) &&
+		counter_csr_access_allowed(id_csr_addr, current_priv);
 		assign id_instr_legal =
 			(id_wen && !id_is_csr) || id_is_store || id_is_branch ||
 			id_is_fence || id_is_ecall || id_is_ebreak ||
@@ -1665,6 +1699,8 @@ module core import common::*;(
 			csr_stval <= '0;
 			csr_medeleg <= '0;
 			csr_mideleg <= '0;
+			csr_mcounteren <= '0;
+			csr_scounteren <= '0;
 			for (int entry = 0; entry < PMP_ENTRIES; entry += 1) begin
 				csr_pmpaddr[entry] <= '0;
 			end
@@ -1711,6 +1747,8 @@ module core import common::*;(
 					CSR_SIP:      csr_mip <= (csr_mip & ~MIP_S_MASK) | (wb_csr_wdata & MIP_S_MASK);
 					CSR_MIE:      csr_mie <= wb_csr_wdata;
 					CSR_SIE:      csr_mie <= (csr_mie & ~MIP_S_MASK) | (wb_csr_wdata & MIP_S_MASK);
+					CSR_MCOUNTEREN: csr_mcounteren <= wb_csr_wdata & COUNTEREN_MASK;
+					CSR_SCOUNTEREN: csr_scounteren <= wb_csr_wdata & COUNTEREN_MASK;
 					CSR_MSCRATCH: csr_mscratch <= wb_csr_wdata;
 					CSR_SSCRATCH: csr_sscratch <= wb_csr_wdata;
 					CSR_MEPC:     csr_mepc <= wb_csr_wdata;

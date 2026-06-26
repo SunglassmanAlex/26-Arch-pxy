@@ -68,12 +68,15 @@ module csr_counter_tb
             PCINIT + 64'h00: instr_at = csrr(5'd5, CSR_CYCLE);
             PCINIT + 64'h04: instr_at = csrr(5'd6, CSR_TIME);
             PCINIT + 64'h08: instr_at = csrr(5'd7, CSR_INSTRET);
-            PCINIT + 64'h0c: instr_at = addi(5'd1, 5'd0, 12'sh100);
-            PCINIT + 64'h10: instr_at = csrw(CSR_MTVEC, 5'd1);
-            PCINIT + 64'h14: instr_at = addi(5'd1, 5'd0, 12'sh040);
-            PCINIT + 64'h18: instr_at = csrw(CSR_MEPC, 5'd1);
-            PCINIT + 64'h1c: instr_at = csrw(CSR_MSTATUS, 5'd0);
-            PCINIT + 64'h20: instr_at = MRET;
+            PCINIT + 64'h0c: instr_at = addi(5'd1, 5'd0, 12'sh007);
+            PCINIT + 64'h10: instr_at = csrw(CSR_MCOUNTEREN, 5'd1);
+            PCINIT + 64'h14: instr_at = csrw(CSR_SCOUNTEREN, 5'd1);
+            PCINIT + 64'h18: instr_at = addi(5'd1, 5'd0, 12'sh100);
+            PCINIT + 64'h1c: instr_at = csrw(CSR_MTVEC, 5'd1);
+            PCINIT + 64'h20: instr_at = addi(5'd1, 5'd0, 12'sh040);
+            PCINIT + 64'h24: instr_at = csrw(CSR_MEPC, 5'd1);
+            PCINIT + 64'h28: instr_at = csrw(CSR_MSTATUS, 5'd0);
+            PCINIT + 64'h2c: instr_at = MRET;
             U_PC:            instr_at = csrr(5'd8, CSR_CYCLE);
             U_PC + 64'h04:   instr_at = csrr(5'd9, CSR_TIME);
             U_PC + 64'h08:   instr_at = csrr(5'd10, CSR_INSTRET);
@@ -124,6 +127,10 @@ module csr_counter_tb
         if (dut.gpr[7] == 64'd0) begin
             $fatal(1, "instret CSR did not count prior retired instructions");
         end
+        if ((dut.csr_mcounteren[2:0] != 3'b111) || (dut.csr_scounteren[2:0] != 3'b111)) begin
+            $fatal(1, "counteren CSR write failed: mcounteren=%h scounteren=%h",
+                dut.csr_mcounteren, dut.csr_scounteren);
+        end
         if (dut.gpr[8] <= dut.gpr[5]) begin
             $fatal(1, "U-mode cycle CSR did not advance: u=%h m=%h", dut.gpr[8], dut.gpr[5]);
         end
@@ -137,6 +144,7 @@ module csr_counter_tb
             $fatal(1, "instruction after illegal CSR write committed");
         end
         $display("csr_counter_mmode_reads [OK]");
+        $display("csr_counter_counteren_writes [OK]");
         $display("csr_counter_umode_reads [OK]");
         $display("csr_counter_readonly_write_illegal [OK]");
     endtask

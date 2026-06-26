@@ -12,6 +12,7 @@ package csr_pkg;
   parameter u12 CSR_MIE = 12'h304;
   parameter u12 CSR_MIP = 12'h344;
   parameter u12 CSR_MTVEC = 12'h305;
+  parameter u12 CSR_MCOUNTEREN = 12'h306;
   parameter u12 CSR_MSTATUS = 12'h300;
   parameter u12 CSR_MSCRATCH = 12'h340;
   parameter u12 CSR_MEPC = 12'h341;
@@ -42,6 +43,7 @@ package csr_pkg;
   parameter u12 CSR_STVAL = 12'h143;
   parameter u12 CSR_SIE = 12'h104;
   parameter u12 CSR_SIP = 12'h144;
+  parameter u12 CSR_SCOUNTEREN = 12'h106;
 
   parameter u64 MSTATUS_MASK = 64'h7e79bb;
   parameter u64 SSTATUS_MASK = 64'h80000003000de122;
