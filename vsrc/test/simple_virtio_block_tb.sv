@@ -509,6 +509,11 @@ module simple_virtio_block_tb
         end
         $display("virtio_queue1_read_data [OK]");
         cbus_write32(VIRTIO_BASE + 64'h064, 32'd1);
+        cbus_write32(VIRTIO_BASE + 64'h0c0, 32'd1);
+        expect_read32(VIRTIO_BASE + 64'h0c0, 32'd0, "virtio_queue1_reset_done");
+        expect_read32(VIRTIO_BASE + 64'h038, 32'd0, "virtio_queue1_reset_num");
+        expect_read32(VIRTIO_BASE + 64'h044, 32'd0, "virtio_queue1_reset_ready");
+        expect_read32(VIRTIO_BASE + 64'h080, 32'd0, "virtio_queue1_reset_desc_low");
         cbus_write32(VIRTIO_BASE + 64'h030, 32'd0);
         expect_read32(VIRTIO_BASE + 64'h038, 32'd0, "virtio_queue0_num_unmodified");
         expect_read32(VIRTIO_BASE + 64'h044, 32'd0, "virtio_queue0_ready_unmodified");

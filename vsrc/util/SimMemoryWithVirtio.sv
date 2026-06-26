@@ -209,6 +209,17 @@ module SimMemoryWithVirtio
         virt_queue_valid = (queue < u32'(VIRTIO_QUEUES));
     endfunction
 
+    task automatic reset_virt_queue(input int queue_idx);
+        begin
+            virt_queue_num[queue_idx] <= 32'd0;
+            virt_queue_ready[queue_idx] <= 32'd0;
+            virt_queue_desc[queue_idx] <= 64'd0;
+            virt_queue_driver[queue_idx] <= 64'd0;
+            virt_queue_device[queue_idx] <= 64'd0;
+            virt_last_avail_idx[queue_idx] <= 16'd0;
+        end
+    endtask
+
     function automatic addr_t clint_alias_addr(input addr_t addr);
         case (addr)
             CLINT_QEMU_MSIP:     clint_alias_addr = CLINT_LEGACY_MSIP;
@@ -1083,6 +1094,7 @@ module SimMemoryWithVirtio
                     virt_queue_device[queue_idx][31:0] : 32'd0;
                 64'h0a4: virtio_reg32_read = virt_queue_valid(virt_queue_sel) ?
                     virt_queue_device[queue_idx][63:32] : 32'd0;
+                64'h0c0: virtio_reg32_read = 32'd0;
                 64'h0fc: virtio_reg32_read = virt_config_generation;
                 64'h100: virtio_reg32_read = u32'(SIMPLE_BLK_SECTORS);
                 64'h104: virtio_reg32_read = 32'd0;
@@ -1190,12 +1202,7 @@ module SimMemoryWithVirtio
                         for (int queue_reset_idx = 0;
                             queue_reset_idx < VIRTIO_QUEUES;
                             queue_reset_idx += 1) begin
-                            virt_queue_num[queue_reset_idx] <= 32'd0;
-                            virt_queue_ready[queue_reset_idx] <= 32'd0;
-                            virt_queue_desc[queue_reset_idx] <= 64'd0;
-                            virt_queue_driver[queue_reset_idx] <= 64'd0;
-                            virt_queue_device[queue_reset_idx] <= 64'd0;
-                            virt_last_avail_idx[queue_reset_idx] <= 16'd0;
+                            reset_virt_queue(queue_reset_idx);
                         end
                         virt_interrupt_status <= 32'd0;
                         plic_pending[PLIC_VIRTIO_SOURCE] <= 1'b0;
@@ -1234,6 +1241,11 @@ module SimMemoryWithVirtio
                 64'h0a4: begin
                     if (virt_queue_valid(virt_queue_sel)) begin
                         virt_queue_device[queue_idx][63:32] <= data;
+                    end
+                end
+                64'h0c0: begin
+                    if ((data != 32'd0) && virt_queue_valid(virt_queue_sel)) begin
+                        reset_virt_queue(queue_idx);
                     end
                 end
                 64'h100: blk_sector[31:0] <= data;
@@ -1317,12 +1329,7 @@ module SimMemoryWithVirtio
             virt_interrupt_status <= 32'd0;
             virt_config_generation <= 32'd0;
             for (int queue_reset_idx = 0; queue_reset_idx < VIRTIO_QUEUES; queue_reset_idx += 1) begin
-                virt_queue_num[queue_reset_idx] <= 32'd0;
-                virt_queue_ready[queue_reset_idx] <= 32'd0;
-                virt_queue_desc[queue_reset_idx] <= 64'd0;
-                virt_queue_driver[queue_reset_idx] <= 64'd0;
-                virt_queue_device[queue_reset_idx] <= 64'd0;
-                virt_last_avail_idx[queue_reset_idx] <= 16'd0;
+                reset_virt_queue(queue_reset_idx);
             end
             plic_threshold_m <= 64'd0;
             plic_threshold_s <= 64'd0;
