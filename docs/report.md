@@ -17,7 +17,7 @@
 - 保存 Nexys4 DDR Vivado 工程元数据：工程 top 使用 `basys3_top` 兼容 wrapper，XDC 使用 Nexys4 DDR 管脚，BRAM/clk_wiz IP 目标器件同步为 `xc7a100tcsg324-1`。
 - 保留 Lab5 的 Sv39 MMU、2 MiB/1 GiB hugepage 支持、特权级和 Lab6 异常中断实现。
 - 新增 Lab+ atomic extension：实现 AMO W 系列指令以及 `LR.W/SC.W`，并接入 difftest atomic event。
-- 新增前端性能优化：顺序取指提前发起请求、`CBusArbiter` idle fast path、`IBusToCBus` 8B 指令行缓冲，以及静态后向分支预测，减少连续取指和循环分支空泡。
+- 新增前端性能优化：顺序取指提前发起请求、`CBusArbiter` idle fast path、`IBusToCBus` 8B 指令行缓冲，以及 32 项 2-bit BHT 动态分支预测，减少连续取指和循环分支空泡。
 - 新增 PMP/privfull 支持：支持 `pmpcfg0` 中 8 个 PMP entry 的 `OFF/TOR/NA4/NAPOT` 匹配，产生 instruction/load/store access fault，并通过 `lab+/4` privileged sys-test。
 - 新增 `EBREAK` 断点异常支持：SYSTEM/funct12=`0x001` 触发同步异常 cause 3。
 - 新增 `FENCE/FENCE.I` 合法 no-op 支持，提升编译器生成程序的兼容性。
@@ -322,11 +322,11 @@ simple virtio block 命令完成时会置位 PLIC source 1 pending，因此软�
 
 取指空泡减少后，原本被慢取指掩盖的 load/use 时序风险会暴露出来：WB 本周期写回的寄存器可能被同周期 decode 读取。为此在 `core` 中补充 WB 到 decode 的简单旁路，当 `wb_valid && wb_wen && wb_rd == rs1/rs2` 时优先使用 `wb_data`。这保证前端加速不会破坏已有 Lab4 这类密集 load/use 程序。
 
-### 5.4 静态后向分支预测
+### 5.4 32 项 2-bit BHT 动态分支预测
 
-在取指响应阶段，`core` 现在会识别合法的条件分支指令，并对负偏移的后向分支采用静态 taken 预测。该策略主要覆盖循环尾部的 `bne/beq/blt/...`，硬件代价比 BTB/BHT 小，也不会预测前向 if/else 分支。
+在取指响应阶段，`core` 现在会识别合法的条件分支指令，并使用一个 32 项的 2-bit 饱和计数器 BHT 预测是否 taken。索引使用 `PC[6:2]`，每项包含 valid 位和 2-bit counter；counter 高位为预测结果，提交阶段按真实分支结果向 taken 或 not-taken 饱和更新。未训练过的 entry 仍采用后向分支静态 taken 作为冷启动兜底，因此循环尾部分支第一次执行时不需要先经历一次必然 miss。
 
-实现上新增了 `if_id_pred_taken/if_id_pred_target`，把每条进入 decode 的分支预测结果随指令一起保存。若取到后向分支，则前端在下一拍请求预测目标；因为当前设计只有一个 IF/ID 槽，本次额外增加了一项 `if_buf` 预取缓冲，用于保存预测目标已经返回但当前分支尚未被 decode 消费的情况。decode 阶段重新计算真实 `id_branch_taken/id_branch_target`，只有预测结果和真实结果不一致时才触发 `id_redirect` 和 `if_flush`，预测正确的 taken branch 不再冲刷前端。
+实现上新增了 `if_id_pred_taken/if_id_pred_target`，把每条进入 decode 的分支预测结果随指令一起保存。预测目标仍由已取到的分支立即数计算，因此不需要单独 BTB；若预测 taken，则前端在下一拍请求目标地址。因为当前设计只有一个 IF/ID 槽，本次额外增加了一项 `if_buf` 预取缓冲，用于保存预测目标已经返回但当前分支尚未被 decode 消费的情况。decode 阶段重新计算真实 `id_branch_taken/id_branch_target`，只有预测结果和真实结果不一致时才触发 `id_redirect` 和 `if_flush`，预测正确的 taken branch 不再冲刷前端。
 
 需要注意的是，CBus 请求发出后不能在 `valid` 保持期间修改地址。初版预测在 `iresp.data_ok` 同周期保持 `if_pending=1` 并改 `if_req_addr`，会触发 `RAMHelper2` 的 `Unexpected CBus request modification`。最终版本改为：预测目标请求延后一拍发起；如果误预测时错误路径请求已经发出，则保持该请求直到 `data_ok` 返回，并用 `if_kill_pending` 丢弃该响应，然后再从正确 PC 重新取指。trap、CSR、`FENCE/FENCE.I` 和 `SFENCE.VMA` 仍然走保守 flush。
 
@@ -349,6 +349,8 @@ MicroBench 在 diff 模式下运行较慢，本轮分支预测后完成了 qsort
 静态预测后: [queen] min time: 5 ms [94140]
 ```
 
+动态 BHT 增量完成后，已重跑 `make test-labplus-3` 快速回归，`atomicity.bin` 仍为 `instrCnt=55, cycleCnt=197, IPC=0.279188`。该用例几乎不包含可重复训练的条件分支，因此周期数与静态预测阶段一致；Lab1/Lab4 和完整 MicroBench 的动态 BHT 重新采样留到后续长时间回归窗口执行。
+
 `lab+/4 TEST=all` 中的 benchmark 结果：
 
 ```text
@@ -368,7 +370,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
   - 扩展访存状态机，支持 AMO read-modify-write。
   - 新增 difftest atomic event 上报。
   - 新增 `if_can_request`，减少顺序指令之间的取指空泡。
-  - 新增普通 JAL/JALR 目标提前取指、静态后向分支预测、一项预测预取缓冲、误预测恢复、`if_flush` 输出和 WB 到 decode 的寄存器旁路。
+  - 新增普通 JAL/JALR 目标提前取指、32 项 2-bit BHT 动态分支预测、未训练后向分支静态兜底、一项预测预取缓冲、误预测恢复、`if_flush` 输出和 WB 到 decode 的寄存器旁路。
   - 新增 8-entry PMP 匹配、取指 access fault 注入、load/store access fault。
   - 新增 `fetch_priv`，处理 trap/mret 重定向期间的取指权限判断。
   - 新增 `EBREAK` 解码和 breakpoint exception cause 3。
@@ -1208,13 +1210,13 @@ timing status: constraints not met, usable for bring-up observation but should b
 - 更高级的 virtio block 多 queue、packed queue、动态配置变更通知和更完整的 config 字段。
 - 更完整的 16550 baud timing 和 receiver line-break timing 等细节。
 - 将更多真实设备事件和更细粒度的 virtio 中断状态接入 PLIC source。
-- 更完整的 I-cache、动态分支预测、BTB/RAS 或多级流水线，用于进一步提升 `test-labplus-2` 性能。
+- 更完整的 I-cache、BTB/RAS 或多级流水线，用于进一步提升 `test-labplus-2` 性能。
 
-这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次静态后向分支预测、8-entry PMP、atomic、virtio 简化模型和前端空泡优化，因此本次没有继续扩大到动态预测或多级流水线。
+这些改动会触及 trap、CSR、MMU、取指和访存多个共享路径，风险明显高于本次 32 项 BHT、8-entry PMP、atomic、virtio 简化模型和前端空泡优化，因此本次没有继续扩大到 BTB/RAS 或多级流水线。
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path、8B 指令行缓冲和静态后向分支预测等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。上板调试中先后修复了 UART 自动字符串发送时 `txData` 中途覆盖、`Hello World` 大小写不一致、TX_DATA backpressure 隔字丢失，以及 BRAM read response stale-ready 导致第二行 `R` 后取指错误的问题。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93020，将 Lab4 周期数从 208529 降到 110572，atomicity 从 372 降到 197。最终 atomic、Lab+ privileged sys-test、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、Lab1 extra 和 Lab4 已完成本轮分支预测回归；其余 MMU page fault、CLINT/PLIC/UART/virtio/xv6 smoke、Vivado pre-board、Nexys4 board device、`soc_top` board trace、Lab5、Lab6 沿用前序回归结果。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path、8B 指令行缓冲和 32 项 2-bit BHT 动态分支预测等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。上板调试中先后修复了 UART 自动字符串发送时 `txData` 中途覆盖、`Hello World` 大小写不一致、TX_DATA backpressure 隔字丢失，以及 BRAM read response stale-ready 导致第二行 `R` 后取指错误的问题。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93020，将 Lab4 周期数从 208529 降到 110572，atomicity 从 372 降到 197。最终 atomicity 已完成动态 BHT 增量快速回归；Lab+ privileged sys-test、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、Lab1 extra、Lab4、MMU page fault、CLINT/PLIC/UART/virtio/xv6 smoke、Vivado pre-board、Nexys4 board device、`soc_top` board trace、Lab5、Lab6 沿用前序回归结果。
 
 ## 10. AI 使用说明
 

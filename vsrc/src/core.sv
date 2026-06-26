@@ -39,6 +39,8 @@ module core import common::*;(
 	localparam word_t MIP_S_MASK       = MIP_SSIP_BIT | MIP_STIP_BIT | MIP_SEIP_BIT;
 	localparam word_t MIP_HW_MASK      = MIP_MSIP_BIT | MIP_MTIP_BIT | MIP_MEIP_BIT;
 	localparam int PMP_ENTRIES = 8;
+	localparam int BP_ENTRIES = 32;
+	localparam int BP_INDEX_BITS = 5;
 
 	addr_t pc, if_req_addr, if_id_pc;
 	logic  if_pending, if_id_valid, if_can_request;
@@ -91,6 +93,8 @@ module core import common::*;(
 	word_t csr_mhartid;
 	word_t mip_value;
 	logic [1:0] current_priv, fetch_priv;
+	logic bp_valid[BP_ENTRIES];
+	logic [1:0] bp_counter[BP_ENTRIES];
 
 	assign priv_mode = current_priv;
 	assign satp = csr_satp;
@@ -128,12 +132,20 @@ module core import common::*;(
 	addr_t if_resp_pred_target;
 	logic  if_resp_pred_taken;
 	logic  if_resp_to_id;
+	logic [BP_INDEX_BITS-1:0] if_resp_bp_index;
+	logic  if_resp_is_branch;
+	logic  if_resp_bht_taken;
+	logic  if_resp_bp_decision;
 
 	assign if_resp_instr = iresp.page_fault ? 32'h0000_0013 : iresp.data;
 	assign if_resp_branch_imm = fetch_branch_imm(iresp.data);
 	assign if_resp_pred_target = if_req_addr + if_resp_branch_imm;
+	assign if_resp_bp_index = if_req_addr[BP_INDEX_BITS+1:2];
+	assign if_resp_is_branch = fetch_is_branch(iresp.data);
+	assign if_resp_bht_taken = bp_valid[if_resp_bp_index] ? bp_counter[if_resp_bp_index][1] : 1'b0;
+	assign if_resp_bp_decision = bp_valid[if_resp_bp_index] ? if_resp_bht_taken : if_resp_branch_imm[63];
 	assign if_resp_pred_taken =
-		!iresp.page_fault && fetch_is_branch(iresp.data) && if_resp_branch_imm[63] &&
+		!iresp.page_fault && if_resp_is_branch && if_resp_bp_decision &&
 		!|if_resp_pred_target[1:0] &&
 		!pmp_access_fault(if_resp_pred_target, MSIZE4, 1'b1, 1'b0, fetch_priv);
 	assign if_resp_to_id = !if_id_valid || (id_consume && !id_redirect);
@@ -162,6 +174,10 @@ module core import common::*;(
 			if_pred_req_valid <= 1'b0;
 			if_pred_req_addr <= '0;
 			if_kill_pending <= 1'b0;
+			for (int bp_i = 0; bp_i < BP_ENTRIES; bp_i += 1) begin
+				bp_valid[bp_i] <= 1'b0;
+				bp_counter[bp_i] <= 2'b01;
+			end
 		end
 		else begin
 			if (wb_trap_valid) begin
@@ -314,6 +330,18 @@ module core import common::*;(
 						if_pending <= 1'b1;
 						if_req_addr <= id_redirect_target;
 					end
+				end
+			end
+			if (if_id_valid && id_consume && id_is_branch && !id_trap) begin
+				bp_valid[id_bp_index] <= 1'b1;
+				if (!bp_valid[id_bp_index]) begin
+					bp_counter[id_bp_index] <= id_branch_taken ? 2'b10 : 2'b01;
+				end
+				else if (id_branch_taken && (bp_counter[id_bp_index] != 2'b11)) begin
+					bp_counter[id_bp_index] <= bp_counter[id_bp_index] + 2'b01;
+				end
+				else if (!id_branch_taken && (bp_counter[id_bp_index] != 2'b00)) begin
+					bp_counter[id_bp_index] <= bp_counter[id_bp_index] - 2'b01;
 				end
 			end
 		end
@@ -643,6 +671,7 @@ module core import common::*;(
 	logic id_instr_access_fault, id_instr_page_fault, id_load_access_fault, id_store_access_fault;
 	logic id_sync_exception, id_interrupt, id_trap, id_trap_is_interrupt, id_trap_to_s;
 	word_t id_interrupt_cause, id_trap_cause, id_trap_tval;
+	logic [BP_INDEX_BITS-1:0] id_bp_index;
 
 	localparam logic [3:0] ALU_ADD  = 4'd0;
 	localparam logic [3:0] ALU_SUB  = 4'd1;
@@ -1182,6 +1211,7 @@ module core import common::*;(
 		endcase
 	end
 	assign id_branch_target = if_id_pc + imm_b;
+	assign id_bp_index = if_id_pc[BP_INDEX_BITS+1:2];
 	assign id_branch_next_pc = id_branch_taken ? id_branch_target : (if_id_pc + 64'd4);
 	assign id_branch_mispredict = id_is_branch &&
 		((if_id_pred_taken != id_branch_taken) ||
