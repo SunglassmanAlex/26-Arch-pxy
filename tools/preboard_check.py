@@ -313,12 +313,17 @@ def main() -> int:
     device_no_comments = strip_sv_comments(device_text)
     require(
         re.search(
-            r"else\s+if\s*\(\s*txState\s*==\s*RDY\s*&&\s*send\s*&&\s*putchar\s*\)\s*txData\s*<=",
+            r"else\s+if\s*\(\s*txState\s*==\s*RDY\s*&&\s*send\s*\)\s*txData\s*<=",
             device_no_comments,
         )
         is not None,
         "board_device_uart_txdata_idle_guard",
         "txData must only load when UART is idle",
+    )
+    require(
+        "putchar" not in device_no_comments,
+        "board_device_uart_no_drop_latch",
+        "TX_DATA writes held while busy must launch when UART returns idle",
     )
     require(
         re.search(

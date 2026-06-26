@@ -1,7 +1,7 @@
 `include "device.svh"
 
 module board_device_tb;
-    localparam int BIT_TICKS = 10417;
+    localparam int BIT_TICKS = 16;
     localparam int STR_LEN = 14;
     localparam logic [STR_LEN-1:0][7:0] EXPECTED = {
         8'h48, 8'h65, 8'h6c, 8'h6c, 8'h6f, 8'h20, 8'h57,
@@ -16,7 +16,10 @@ module board_device_tb;
     logic [7:0] size;
     logic ready, last;
 
-    device #(.SIMULATION(1'b0)) dut(
+    device #(
+        .SIMULATION(1'b0),
+        .BIT_TMR_MAX_VALUE(BIT_TICKS - 1)
+    ) dut(
         .clk(clk),
         .reset(reset),
         .cpu_clk(cpu_clk),
@@ -77,6 +80,26 @@ module board_device_tb;
         drive_idle();
     endtask
 
+    task automatic hold_write_until_ready(
+        input logic [63:0] write_addr,
+        input logic [63:0] data,
+        input string busy_name,
+        input string ready_name
+    );
+        valid = 1'b1;
+        wvalid = 1'b1;
+        addr = write_addr;
+        wdata = data;
+        #1;
+        check(!ready, busy_name);
+        wait (ready);
+        #1;
+        check(ready, ready_name);
+        @(posedge clk);
+        #1;
+        drive_idle();
+    endtask
+
     task automatic wait_for_start(input string name);
         int cycles;
         cycles = 0;
@@ -115,6 +138,22 @@ module board_device_tb;
         read_switch(4'd0, 64'd31, "board_device_sw0");
         read_switch(4'd5, 64'd16, "board_device_sw5");
         read_switch(4'd9, 64'd0, "board_device_sw_default");
+
+        write_addr(TX_DATA, 64'h0000004100000000);
+        fork
+            hold_write_until_ready(
+                TX_DATA,
+                64'h0000004200000000,
+                "board_device_uart_backpressure_busy",
+                "board_device_uart_backpressure_ready"
+            );
+            begin
+                sample_uart_byte(data, "board_device_backpressure_A");
+                check(data === 8'h41, "board_device_backpressure_A_data");
+                sample_uart_byte(data, "board_device_backpressure_B");
+                check(data === 8'h42, "board_device_backpressure_B_data");
+            end
+        join
 
         write_addr(FINISH_ADDR, 64'h1);
         @(posedge clk);

@@ -104,15 +104,9 @@ module device #(
 	logic [7:0] char_data;
 	logic tx_access;
 	logic [4:0] idx;
-	logic putchar;
 
-	always_ff @(posedge clk) begin
-		if (reset) putchar <= '1;
-		else if (~valid) putchar <= '1;
-		else if (addr == TX_DATA && valid && wvalid && txState != RDY) putchar <= '0;
-	end
-
-	assign send = (idx != 0 && finish) || (addr == TX_DATA && valid && wvalid);
+	assign tx_access = valid && wvalid && (addr == TX_DATA);
+	assign send = (idx != 0 && finish) || tx_access;
 
 	always_ff @(posedge clk) begin
 		if (reset) idx <= STR_LAST;
@@ -125,7 +119,7 @@ module device #(
 		if (reset) txState <= RDY;
 		else begin
 			unique case(txState)
-				RDY: if (send && putchar) txState <= LOAD_BIT;
+				RDY: if (send) txState <= LOAD_BIT;
 				LOAD_BIT: txState <= SEND_BIT;
 				SEND_BIT: begin
 					if (bitDone) begin
@@ -152,7 +146,7 @@ module device #(
 
 	always_ff @(posedge clk) begin
 		if (reset) txData <= 10'h3ff;
-		else if (txState == RDY && send && putchar) txData <= {1'b1, char_data, 1'b0};
+		else if (txState == RDY && send) txData <= {1'b1, char_data, 1'b0};
 	end
 
 	always_ff @(posedge clk) begin
@@ -163,7 +157,6 @@ module device #(
 
 	assign tx = txBit;
 	assign tx_ready = txState == RDY;
-	assign tx_access = valid && wvalid && (addr == TX_DATA);
 	if (SIMULATION)
 		assign ready = '1;
 	else
@@ -172,7 +165,7 @@ module device #(
 	always_ff @(posedge clk) begin
 		if (~reset && valid && wvalid) begin
 			if (addr == TX_DATA) begin
-				$write("%c", char_data);
+				if (SIMULATION || tx_ready) $write("%c", char_data);
 			end else if (addr == FINISH_ADDR) begin
 				$write("Hello World!\n");
 			end

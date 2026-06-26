@@ -25,6 +25,14 @@ module bram_0 (
 endmodule
 
 module board_soc_trace_tb;
+	localparam int UART_PREFIX_LEN = 28;
+	localparam logic [UART_PREFIX_LEN-1:0][7:0] UART_PREFIX = {
+		8'h41, 8'h45, 8'h53, 8'h20, 8'h62, 8'h65, 8'h6e, 8'h63,
+		8'h68, 8'h6d, 8'h61, 8'h72, 8'h6b, 8'h20, 8'h2b, 8'h20,
+		8'h63, 8'h6f, 8'h72, 8'h72, 8'h65, 8'h63, 8'h74, 8'h6e,
+		8'h65, 8'h73, 8'h73, 8'h0a
+	};
+
 	logic clk;
 	logic reset;
 	logic [3:0] sw;
@@ -44,7 +52,9 @@ module board_soc_trace_tb;
 
 	int cycle;
 	int printed_reqs;
+	int accepted_uart_writes;
 	logic [3:0] last_led;
+	logic hit_logged;
 
 	initial begin
 		$dumpfile("build/board-soc-trace/board_soc_trace_tb.fst");
@@ -54,6 +64,8 @@ module board_soc_trace_tb;
 		sw = 4'b1000;
 		last_led = 4'h0;
 		printed_reqs = 0;
+		accepted_uart_writes = 0;
+		hit_logged = 1'b0;
 		repeat (20) @(posedge clk);
 		reset = 1'b0;
 
@@ -74,16 +86,29 @@ module board_soc_trace_tb;
 				printed_reqs++;
 			end
 
-			if (dut.device_valid && dut.device_wvalid) begin
+			if (dut.device_valid && dut.device_wvalid && dut.device_ready) begin
 				$display("cycle=%0d device_write addr=%016x data=%016x strobe=%02x",
 					cycle, dut.device_addr, dut.device_wdata, dut.wstrobe);
+				if (dut.device_addr == TX_DATA) begin
+					if (accepted_uart_writes < UART_PREFIX_LEN &&
+						dut.device_wdata[39:32] !== UART_PREFIX[UART_PREFIX_LEN - 1 - accepted_uart_writes]) begin
+						$display("board_soc_trace_uart_prefix_mismatch cycle=%0d index=%0d got=%02x expected=%02x",
+							cycle, accepted_uart_writes, dut.device_wdata[39:32],
+							UART_PREFIX[UART_PREFIX_LEN - 1 - accepted_uart_writes]);
+						$fatal;
+					end
+					accepted_uart_writes++;
+					if (accepted_uart_writes == UART_PREFIX_LEN) begin
+						$display("board_soc_trace_uart_prefix_ok cycle=%0d accepted_uart_writes=%0d", cycle, accepted_uart_writes);
+						$finish;
+					end
+				end
 			end
 
-			if (dut.uart_seen || dut.finish_seen) begin
-				$display("board_soc_trace_hit_output cycle=%0d led=%b uart_seen=%0b finish_seen=%0b",
-					cycle, led, dut.uart_seen, dut.finish_seen);
-				repeat (20) @(posedge clk);
-				$finish;
+			if (!hit_logged && (dut.uart_seen || dut.finish_seen)) begin
+				$display("board_soc_trace_hit_output cycle=%0d led=%b uart_seen=%0b finish_seen=%0b accepted_uart_writes=%0d",
+					cycle, led, dut.uart_seen, dut.finish_seen, accepted_uart_writes);
+				hit_logged = 1'b1;
 			end
 		end
 

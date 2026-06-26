@@ -191,7 +191,7 @@ test-labplus-vivado-precheck:
 
 test-labplus-board-device:
 	rm -rf build/board-device
-	verilator --binary --timing --top-module board_device_tb \
+	CCACHE_DISABLE=1 verilator --binary --timing --top-module board_device_tb \
 	  +define+VERILATOR=1 -I$(NOOP_HOME)/vivado/src \
 	  -Mdir build/board-device -o board_device_tb \
 	  vsrc/test/board_device_tb.sv vivado/src/device.sv
