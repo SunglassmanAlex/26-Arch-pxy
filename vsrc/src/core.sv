@@ -717,6 +717,19 @@ module core import common::*;(
 		end
 	endfunction
 
+	function automatic logic [1:0] effective_data_priv(input logic [1:0] mode, input word_t status);
+		if ((mode == PRIV_M) && |(status & MSTATUS_MPRV_BIT)) begin
+			unique case (status[12:11])
+				PRIV_S:  effective_data_priv = PRIV_S;
+				PRIV_M:  effective_data_priv = PRIV_M;
+				default: effective_data_priv = PRIV_U;
+			endcase
+		end
+		else begin
+			effective_data_priv = mode;
+		end
+	endfunction
+
 	function automatic logic trap_delegated(input logic is_interrupt, input word_t cause, input logic [1:0] from_priv);
 		if (from_priv == PRIV_M || |cause[63:6]) begin
 			trap_delegated = 1'b0;
@@ -753,6 +766,7 @@ module core import common::*;(
 	logic id_instr_access_fault, id_instr_page_fault, id_load_access_fault, id_store_access_fault;
 	logic id_sync_exception, id_interrupt, id_trap, id_trap_is_interrupt, id_trap_to_s;
 	word_t id_interrupt_cause, id_trap_cause, id_trap_tval;
+	logic [1:0] id_mem_priv;
 	logic [BP_INDEX_BITS-1:0] id_bp_index;
 
 	localparam logic [3:0] ALU_ADD  = 4'd0;
@@ -1329,12 +1343,13 @@ module core import common::*;(
 	assign id_store_misaligned = (id_is_store || id_is_amo) && addr_misaligned(id_mem_addr, id_mem_size);
 	assign id_instr_access_fault = id_valid && if_id_access_fault;
 	assign id_instr_page_fault = id_valid && if_id_page_fault;
+	assign id_mem_priv = effective_data_priv(current_priv, csr_mstatus);
 	assign id_load_access_fault =
 		(id_is_load || (id_is_amo && !id_is_sc)) &&
-		pmp_access_fault(id_mem_addr, id_mem_size, 1'b0, 1'b0, current_priv);
+		pmp_access_fault(id_mem_addr, id_mem_size, 1'b0, 1'b0, id_mem_priv);
 	assign id_store_access_fault =
 		(id_is_store || (id_is_amo && !id_is_lr)) &&
-		pmp_access_fault(id_mem_addr, id_mem_size, 1'b0, 1'b1, current_priv);
+		pmp_access_fault(id_mem_addr, id_mem_size, 1'b0, 1'b1, id_mem_priv);
 
 	always_comb begin
 		id_interrupt = 1'b0;

@@ -26,6 +26,7 @@ module MMU
     localparam logic [3:0] SATP_MODE_SV39 = 4'd8;
     localparam word_t MSTATUS_SUM_BIT = 64'h0000_0000_0004_0000;
     localparam word_t MSTATUS_MXR_BIT = 64'h0000_0000_0008_0000;
+    localparam word_t MSTATUS_MPRV_BIT = 64'h0000_0000_0002_0000;
 
     typedef enum logic [2:0] {
         S_IDLE,
@@ -40,6 +41,28 @@ module MMU
     addr_t walk_addr, final_paddr, pte_update_addr;
     word_t pte_update_data;
     logic [1:0] level;
+    logic [1:0] saved_priv;
+
+    function automatic logic [1:0] mstatus_mpp(input word_t status);
+        unique case (status[12:11])
+            PRIV_S:  mstatus_mpp = PRIV_S;
+            PRIV_M:  mstatus_mpp = PRIV_M;
+            default: mstatus_mpp = PRIV_U;
+        endcase
+    endfunction
+
+    function automatic logic [1:0] effective_priv(
+        input cbus_req_t req,
+        input logic [1:0] mode,
+        input word_t status
+    );
+        if ((mode == PRIV_M) && !req.is_instr && |(status & MSTATUS_MPRV_BIT)) begin
+            effective_priv = mstatus_mpp(status);
+        end
+        else begin
+            effective_priv = mode;
+        end
+    endfunction
 
     function automatic logic mmu_enabled(input logic [1:0] mode, input word_t satp_val);
         mmu_enabled = (mode != PRIV_M) && (satp_val[63:60] == SATP_MODE_SV39);
@@ -127,7 +150,7 @@ module MMU
         oreq = '0;
         iresp = '0;
 
-        if (state == S_IDLE && !mmu_enabled(priv_mode, satp)) begin
+        if (state == S_IDLE && !mmu_enabled(effective_priv(ireq, priv_mode, mstatus), satp)) begin
             oreq = ireq;
             iresp = oresp;
             iresp.paddr = ireq.addr;
@@ -178,12 +201,14 @@ module MMU
             pte_update_addr <= '0;
             pte_update_data <= '0;
             level <= '0;
+            saved_priv <= PRIV_M;
         end
         else begin
             unique case (state)
                 S_IDLE: begin
-                    if (ireq.valid && mmu_enabled(priv_mode, satp)) begin
+                    if (ireq.valid && mmu_enabled(effective_priv(ireq, priv_mode, mstatus), satp)) begin
                         saved_req <= ireq;
+                        saved_priv <= effective_priv(ireq, priv_mode, mstatus);
                         if (!sv39_va_valid(ireq.addr)) begin
                             state <= S_FAULT;
                         end
@@ -210,7 +235,7 @@ module MMU
                             end
                         end
                         else if (superpage_misaligned(oresp.data, level) ||
-                            pte_perm_fault(oresp.data, saved_req, priv_mode, mstatus)) begin
+                            pte_perm_fault(oresp.data, saved_req, saved_priv, mstatus)) begin
                             state <= S_FAULT;
                         end
                         else begin

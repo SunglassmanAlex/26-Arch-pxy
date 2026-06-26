@@ -30,6 +30,7 @@
 - 新增 S 态中断 pending 委托转换：当 `mideleg` 委托 SSIP/STIP/SEIP 时，将 `swint/trint/exint` 映射到对应 S pending 位。
 - 新增 MMU page fault 与 PTE 权限检查：识别 Sv39 非 canonical 地址、无效 PTE、叶子页权限不满足、巨页 PPN 未对齐，并产生 instruction/load/store page fault。
 - 新增 `SUM/MXR` 支持：`MXR` 允许 load 读取 execute-only 页，`SUM` 允许 S 态数据访问 U 页，同时保持 S 态不能从 U 页取指。
+- 新增 `mstatus.MPRV` 数据访存权限支持：M 态 load/store 在 `MPRV=1` 时按 `MPP` 指定的 U/S/M effective privilege 执行地址翻译和 PMP/MMU 权限检查，取指不受 `MPRV` 影响。
 - 新增 PTE A/D 位硬件更新：叶子 PTE 的 `A=0` 或写访问 `D=0` 时，MMU 先写回更新后的 PTE，再继续最终访存。
 - 新增仿真侧 virtio/disk MMIO：在 `0x10001000` 暴露 virtio-mmio 识别寄存器、`ConfigGeneration` 和 virtio-blk config 字段，提供包含 `SIZE_MAX/SEG_MAX/BLK_SIZE/FLUSH/DISCARD/WRITE_ZEROES` 的 feature negotiation，提供同步 512B sector 读写扩展，支持 `Status=0` reset、4 条 split queue 的独立 descriptor/avail/used ring 状态、`QueueReset` 单队列重置、indirect descriptor、一次 `QueueNotify` drain 多个 pending avail entry、event idx 中断抑制/触发、`VIRTIO_BLK_T_FLUSH` status-only 请求、`VIRTIO_BLK_T_DISCARD` no-op 成功请求和 `VIRTIO_BLK_T_WRITE_ZEROES` 清零请求，以及 xv6 风格不协商 event idx 时的普通 avail flags 中断控制，并支持 `+simple_blk_image=...` 从二进制镜像初始化 disk。
 - 新增仿真侧 CLINT 地址兼容：`SimMemoryWithVirtio` 将 QEMU/xv6 `0x0200...` 的 `msip/mtimecmp/mtime` 地址映射到课程框架 `0x3800...` 地址。
@@ -402,6 +403,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
   - 新增 S-mode、`SRET`、`medeleg/mideleg` 委托、S 态 trap CSR 写入。
   - 新增委托后的 `SSIP/STIP/SEIP` pending 镜像，支持 `swint/trint/exint` 进入 S trap。
   - 新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水。
+  - 新增 `mstatus.MPRV` 数据访存 effective privilege 计算，使 M 态 load/store 的 PMP 预检查可按 `MPP` 降权执行。
   - 新增 `WFI` 解码，S/M 态作为合法 no-op，U 态仍按非法指令处理。
   - 新增 `mstatus.TSR/TW/TVM` 执行限制：S 态 `SRET`、`WFI`、`SFENCE.VMA` 和 `satp` CSR 访问在对应限制位打开时触发 illegal instruction trap。
   - 输出当前 `mstatus` 给 MMU 使用。
@@ -429,6 +431,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
   - 新增 fault 状态和 PTE 权限检查，不再将无效 PTE 转成物理地址 0。
   - 支持 Sv39 canonical 地址检查和巨页 PPN 对齐检查。
   - 支持 `SUM/MXR` 对 S/U 态数据访问和 execute-only 页读取的影响。
+  - 支持 `MPRV` 数据访存 effective privilege：M 态数据请求可按 `mstatus.MPP` 决定是否启用 Sv39 翻译和 PTE 权限检查，M 态取指仍保持 Bare。
   - 新增 `S_AD_UPDATE` 状态，支持硬件置 PTE `A/D` 位。
 - `vsrc/util/IBusToCBus.sv`、`vsrc/util/DBusToCBus.sv`
   - 传递 `is_instr` 与 `page_fault`。
@@ -445,6 +448,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/mmu_page_fault_tb.sv`
   - 新增独立 Verilator testbench，直接实例化 `MMU`。
   - 构造固定三层 Sv39 页表，验证 instruction/load/store page fault 与正常 load 翻译。
+  - 扩展 `MPRV` directed case：验证 M 态取指忽略 `MPRV`、MPRV+MPP=U 数据访存按 U 页权限检查、MPRV+MPP=S 数据访存受 `SUM` 控制。
 - `vsrc/test/s_interrupt_pending_tb.sv`
   - 新增独立 core 级 Verilator testbench，用手写 CSR 指令初始化委托和 S 态中断使能。
   - 验证 `trint` 在 `mideleg.STIP=1`、`mie.STIE=1`、`mstatus.SIE=1` 后进入 S trap，`scause` 为 interrupt cause 5。

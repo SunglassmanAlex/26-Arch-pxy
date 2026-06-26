@@ -6,6 +6,8 @@ module mmu_page_fault_tb
     import common::*;
 ;
     localparam logic [1:0] PRIV_U = 2'b00;
+    localparam logic [1:0] PRIV_S = 2'b01;
+    localparam logic [1:0] PRIV_M = 2'b11;
     localparam addr_t ROOT_PTE_ADDR = 64'h0000_0000_0000_1000;
     localparam addr_t L1_PTE_ADDR   = 64'h0000_0000_0000_2000;
     localparam addr_t L0_PTE_ADDR   = 64'h0000_0000_0000_3000;
@@ -18,6 +20,9 @@ module mmu_page_fault_tb
     localparam word_t PTE_U = 64'h010;
     localparam word_t PTE_A = 64'h040;
     localparam word_t PTE_D = 64'h080;
+    localparam word_t MSTATUS_MPRV = 64'h0000_0000_0002_0000;
+    localparam word_t MSTATUS_SUM  = 64'h0000_0000_0004_0000;
+    localparam word_t MSTATUS_MPP_S = 64'h0000_0000_0000_0800;
 
     logic clk, reset;
     logic [1:0] priv_mode;
@@ -139,12 +144,35 @@ module mmu_page_fault_tb
         @(posedge clk);
     endtask
 
+    task automatic run_pass_through_case(input string name, input logic is_instr);
+        leaf_pte = make_pte(64'd4, 64'd0);
+        start_request(is_instr, 1'b0);
+        wait_response(name);
+        if (iresp.page_fault) begin
+            $fatal(1, "%s unexpectedly raised page_fault", name);
+        end
+        if (iresp.paddr !== 64'd0) begin
+            $fatal(1, "%s paddr=%h expected bare paddr 0", name, iresp.paddr);
+        end
+        $display("%s [OK]", name);
+        @(posedge clk);
+    endtask
+
     initial begin
         reset_dut();
         run_case("instruction_page_fault", 1'b1, 1'b0, PTE_V | PTE_R | PTE_U | PTE_A | PTE_D, 1'b1);
         run_case("load_page_fault",        1'b0, 1'b0, PTE_V | PTE_X | PTE_U | PTE_A | PTE_D, 1'b1);
         run_case("store_page_fault",       1'b0, 1'b1, PTE_V | PTE_R | PTE_U | PTE_A | PTE_D, 1'b1);
         run_case("load_ok",                1'b0, 1'b0, PTE_V | PTE_R | PTE_U | PTE_A | PTE_D, 1'b0);
+        priv_mode = PRIV_M;
+        mstatus = MSTATUS_MPRV;
+        run_pass_through_case("mprv_instruction_ignored", 1'b1);
+        run_case("mprv_u_load_rejects_supervisor_page", 1'b0, 1'b0, PTE_V | PTE_R | PTE_A | PTE_D, 1'b1);
+        run_case("mprv_u_load_user_page_ok",            1'b0, 1'b0, PTE_V | PTE_R | PTE_U | PTE_A | PTE_D, 1'b0);
+        mstatus = MSTATUS_MPRV | MSTATUS_MPP_S;
+        run_case("mprv_s_load_user_page_sum_clear",     1'b0, 1'b0, PTE_V | PTE_R | PTE_U | PTE_A | PTE_D, 1'b1);
+        mstatus = MSTATUS_MPRV | MSTATUS_MPP_S | MSTATUS_SUM;
+        run_case("mprv_s_load_user_page_sum_ok",        1'b0, 1'b0, PTE_V | PTE_R | PTE_U | PTE_A | PTE_D, 1'b0);
         $display("MMU page fault directed tests passed.");
         $finish;
     end
