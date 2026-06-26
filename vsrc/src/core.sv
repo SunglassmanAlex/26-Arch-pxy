@@ -45,6 +45,18 @@ module core import common::*;(
 	u32    if_id_instr;
 	logic  if_id_access_fault, if_id_page_fault;
 	addr_t if_id_fault_tval;
+	logic  if_id_pred_taken;
+	addr_t if_id_pred_target;
+	logic  if_buf_valid;
+	addr_t if_buf_pc;
+	u32    if_buf_instr;
+	logic  if_buf_access_fault, if_buf_page_fault;
+	addr_t if_buf_fault_tval;
+	logic  if_buf_pred_taken;
+	addr_t if_buf_pred_target;
+	logic  if_pred_req_valid;
+	addr_t if_pred_req_addr;
+	logic  if_kill_pending;
 	logic  id_consume;
 	logic  id_redirect;
 	logic  id_fast_redirect;
@@ -100,6 +112,32 @@ module core import common::*;(
 	assign dreq.strobe = mem_strobe;
 	assign dreq.data   = mem_wdata;
 
+	function automatic word_t fetch_branch_imm(input u32 instr);
+		fetch_branch_imm = {{51{instr[31]}}, instr[31], instr[7], instr[30:25], instr[11:8], 1'b0};
+	endfunction
+
+	function automatic logic fetch_is_branch(input u32 instr);
+		fetch_is_branch = (instr[6:0] == 7'b1100011) &&
+			((instr[14:12] == 3'b000) || (instr[14:12] == 3'b001) ||
+			 (instr[14:12] == 3'b100) || (instr[14:12] == 3'b101) ||
+			 (instr[14:12] == 3'b110) || (instr[14:12] == 3'b111));
+	endfunction
+
+	u32    if_resp_instr;
+	word_t if_resp_branch_imm;
+	addr_t if_resp_pred_target;
+	logic  if_resp_pred_taken;
+	logic  if_resp_to_id;
+
+	assign if_resp_instr = iresp.page_fault ? 32'h0000_0013 : iresp.data;
+	assign if_resp_branch_imm = fetch_branch_imm(iresp.data);
+	assign if_resp_pred_target = if_req_addr + if_resp_branch_imm;
+	assign if_resp_pred_taken =
+		!iresp.page_fault && fetch_is_branch(iresp.data) && if_resp_branch_imm[63] &&
+		!|if_resp_pred_target[1:0] &&
+		!pmp_access_fault(if_resp_pred_target, MSIZE4, 1'b1, 1'b0, fetch_priv);
+	assign if_resp_to_id = !if_id_valid || (id_consume && !id_redirect);
+
 	always_ff @(posedge clk) begin
 		if (reset) begin
 			pc <= PCINIT;
@@ -111,15 +149,68 @@ module core import common::*;(
 			if_id_access_fault <= 1'b0;
 			if_id_page_fault <= 1'b0;
 			if_id_fault_tval <= '0;
+			if_id_pred_taken <= 1'b0;
+			if_id_pred_target <= '0;
+			if_buf_valid <= 1'b0;
+			if_buf_pc <= '0;
+			if_buf_instr <= '0;
+			if_buf_access_fault <= 1'b0;
+			if_buf_page_fault <= 1'b0;
+			if_buf_fault_tval <= '0;
+			if_buf_pred_taken <= 1'b0;
+			if_buf_pred_target <= '0;
+			if_pred_req_valid <= 1'b0;
+			if_pred_req_addr <= '0;
+			if_kill_pending <= 1'b0;
 		end
 		else begin
 			if (wb_trap_valid) begin
 				pc <= wb_trap_to_s ? {csr_stvec[63:2], 2'b00} : {csr_mtvec[63:2], 2'b00};
-				if_pending <= 1'b0;
 				if_id_valid <= 1'b0;
 				if_id_access_fault <= 1'b0;
 				if_id_page_fault <= 1'b0;
 				if_id_fault_tval <= '0;
+				if_id_pred_taken <= 1'b0;
+				if_id_pred_target <= '0;
+				if_buf_valid <= 1'b0;
+				if_pred_req_valid <= 1'b0;
+				if (if_pending && !iresp.data_ok) begin
+					if_kill_pending <= 1'b1;
+				end
+				else begin
+					if_pending <= 1'b0;
+					if_kill_pending <= 1'b0;
+				end
+			end
+			else if (if_pred_req_valid && !if_pending && !mem_pending) begin
+				if_pred_req_valid <= 1'b0;
+				if (pmp_access_fault(if_pred_req_addr, MSIZE4, 1'b1, 1'b0, fetch_priv)) begin
+					pc <= if_pred_req_addr + 64'd4;
+					if (if_resp_to_id) begin
+						if_id_valid <= 1'b1;
+						if_id_pc <= if_pred_req_addr;
+						if_id_instr <= 32'h0000_0013;
+						if_id_access_fault <= 1'b1;
+						if_id_page_fault <= 1'b0;
+						if_id_fault_tval <= if_pred_req_addr;
+						if_id_pred_taken <= 1'b0;
+						if_id_pred_target <= '0;
+					end
+					else if (!if_buf_valid) begin
+						if_buf_valid <= 1'b1;
+						if_buf_pc <= if_pred_req_addr;
+						if_buf_instr <= 32'h0000_0013;
+						if_buf_access_fault <= 1'b1;
+						if_buf_page_fault <= 1'b0;
+						if_buf_fault_tval <= if_pred_req_addr;
+						if_buf_pred_taken <= 1'b0;
+						if_buf_pred_target <= '0;
+					end
+				end
+				else begin
+					if_pending <= 1'b1;
+					if_req_addr <= if_pred_req_addr;
+				end
 			end
 			else if (if_can_request) begin
 				if (pmp_access_fault(pc, MSIZE4, 1'b1, 1'b0, fetch_priv)) begin
@@ -129,6 +220,8 @@ module core import common::*;(
 					if_id_access_fault <= 1'b1;
 					if_id_page_fault <= 1'b0;
 					if_id_fault_tval <= pc;
+					if_id_pred_taken <= 1'b0;
+					if_id_pred_target <= '0;
 				end
 				else begin
 					if_pending <= 1'b1;
@@ -136,22 +229,75 @@ module core import common::*;(
 				end
 			end
 			if (if_pending && iresp.data_ok) begin
-				if_id_valid <= 1'b1;
-				if_id_pc <= if_req_addr;
-				if_id_instr <= iresp.page_fault ? 32'h0000_0013 : iresp.data;
-				if_id_access_fault <= 1'b0;
-				if_id_page_fault <= iresp.page_fault;
-				if_id_fault_tval <= iresp.page_fault ? if_req_addr : '0;
-				pc <= if_req_addr + 64'd4;
 				if_pending <= 1'b0;
+				if_kill_pending <= 1'b0;
+				if (!if_kill_pending && !wb_trap_valid) begin
+					if (if_resp_to_id) begin
+						if_id_valid <= 1'b1;
+						if_id_pc <= if_req_addr;
+						if_id_instr <= if_resp_instr;
+						if_id_access_fault <= 1'b0;
+						if_id_page_fault <= iresp.page_fault;
+						if_id_fault_tval <= iresp.page_fault ? if_req_addr : '0;
+						if_id_pred_taken <= if_resp_pred_taken;
+						if_id_pred_target <= if_resp_pred_target;
+						pc <= if_resp_pred_taken ? if_resp_pred_target : (if_req_addr + 64'd4);
+						if_pred_req_valid <= if_resp_pred_taken;
+						if_pred_req_addr <= if_resp_pred_target;
+					end
+					else if (!if_buf_valid) begin
+						if_buf_valid <= 1'b1;
+						if_buf_pc <= if_req_addr;
+						if_buf_instr <= if_resp_instr;
+						if_buf_access_fault <= 1'b0;
+						if_buf_page_fault <= iresp.page_fault;
+						if_buf_fault_tval <= iresp.page_fault ? if_req_addr : '0;
+						if_buf_pred_taken <= if_resp_pred_taken;
+						if_buf_pred_target <= if_resp_pred_target;
+						pc <= if_req_addr + 64'd4;
+					end
+				end
 			end
-			if (if_id_valid && id_consume) begin
-				if_id_valid <= 1'b0;
-				if_id_access_fault <= 1'b0;
-				if_id_page_fault <= 1'b0;
+			if (if_id_valid && id_consume && !id_redirect &&
+				!(if_pending && iresp.data_ok && !if_kill_pending && !wb_trap_valid)) begin
+				if (if_buf_valid) begin
+					if_id_valid <= 1'b1;
+					if_id_pc <= if_buf_pc;
+					if_id_instr <= if_buf_instr;
+					if_id_access_fault <= if_buf_access_fault;
+					if_id_page_fault <= if_buf_page_fault;
+					if_id_fault_tval <= if_buf_fault_tval;
+					if_id_pred_taken <= if_buf_pred_taken;
+					if_id_pred_target <= if_buf_pred_target;
+					if_buf_valid <= 1'b0;
+					pc <= if_buf_pred_taken ? if_buf_pred_target : (if_buf_pc + 64'd4);
+					if_pred_req_valid <= if_buf_pred_taken;
+					if_pred_req_addr <= if_buf_pred_target;
+				end
+				else begin
+					if_id_valid <= 1'b0;
+					if_id_access_fault <= 1'b0;
+					if_id_page_fault <= 1'b0;
+					if_id_pred_taken <= 1'b0;
+					if_id_pred_target <= '0;
+				end
 			end
 			if (if_id_valid && id_consume && id_redirect) begin
 				pc <= id_redirect_target;
+				if_id_valid <= 1'b0;
+				if_id_access_fault <= 1'b0;
+				if_id_page_fault <= 1'b0;
+				if_id_pred_taken <= 1'b0;
+				if_id_pred_target <= '0;
+				if_buf_valid <= 1'b0;
+				if_pred_req_valid <= 1'b0;
+				if (if_pending && !iresp.data_ok) begin
+					if_kill_pending <= 1'b1;
+				end
+				else begin
+					if_pending <= 1'b0;
+					if_kill_pending <= 1'b0;
+				end
 				if (id_fast_redirect && !if_pending) begin
 					if (pmp_access_fault(id_redirect_target, MSIZE4, 1'b1, 1'b0, fetch_priv)) begin
 						if_pending <= 1'b0;
@@ -161,6 +307,8 @@ module core import common::*;(
 						if_id_access_fault <= 1'b1;
 						if_id_page_fault <= 1'b0;
 						if_id_fault_tval <= id_redirect_target;
+						if_id_pred_taken <= 1'b0;
+						if_id_pred_target <= '0;
 					end
 					else begin
 						if_pending <= 1'b1;
@@ -481,10 +629,10 @@ module core import common::*;(
 	word_t ex_op1, ex_op2, ex_res, ex_res_raw, md_res;
 	word_t id_jalr_target_raw;
 	addr_t id_mem_addr;
-	addr_t id_jump_target, id_branch_target, id_control_target;
+	addr_t id_jump_target, id_branch_target, id_branch_next_pc, id_control_target;
 	strobe_t id_store_mask;
 	word_t id_store_data;
-	logic id_fire, id_go_mem, id_branch_taken;
+	logic id_fire, id_go_mem, id_branch_taken, id_branch_mispredict;
 	csr_addr_t id_csr_addr;
 	word_t id_csr_rdata, id_csr_src, id_csr_wdata;
 	logic id_csr_wen;
@@ -1034,6 +1182,10 @@ module core import common::*;(
 		endcase
 	end
 	assign id_branch_target = if_id_pc + imm_b;
+	assign id_branch_next_pc = id_branch_taken ? id_branch_target : (if_id_pc + 64'd4);
+	assign id_branch_mispredict = id_is_branch &&
+		((if_id_pred_taken != id_branch_taken) ||
+		 (if_id_pred_taken && id_branch_taken && (if_id_pred_target != id_branch_target)));
 	assign id_jalr_target_raw = rs1_val + imm_i;
 	assign id_jump_target = id_is_jalr ? {id_jalr_target_raw[63:1], 1'b0} : (if_id_pc + imm_j);
 	assign id_control_target = id_is_branch ? id_branch_target : id_jump_target;
@@ -1139,15 +1291,17 @@ module core import common::*;(
 		assign id_trap_is_interrupt = !id_sync_exception && id_interrupt;
 		assign id_trap_to_s = id_trap && trap_delegated(id_trap_is_interrupt, id_trap_cause, current_priv);
 		assign id_redirect = id_trap || (id_is_jal || id_is_jalr) ||
-			(id_is_branch && id_branch_taken) || id_is_csr || id_is_mret || id_is_sret;
+			id_branch_mispredict || id_is_csr || id_is_mret || id_is_sret;
 		assign id_fast_redirect = !id_trap &&
-			(id_is_jal || id_is_jalr || (id_is_branch && id_branch_taken));
-		assign if_can_request = !if_pending && !mem_pending &&
+			(id_is_jal || id_is_jalr || id_branch_mispredict);
+		assign if_can_request = !if_pending && !if_kill_pending && !if_buf_valid &&
+			!if_pred_req_valid && !mem_pending &&
 			(!if_id_valid || (id_consume && !id_redirect));
 		assign id_redirect_target = id_trap ? (id_trap_to_s ? {csr_stvec[63:2], 2'b00} : {csr_mtvec[63:2], 2'b00}) :
 			(id_is_mret ? csr_mepc :
 			(id_is_sret ? csr_sepc :
-			(id_is_csr ? (if_id_pc + 64'd4) : id_control_target)));
+			(id_is_csr ? (if_id_pc + 64'd4) :
+			(id_is_branch ? id_branch_next_pc : id_control_target))));
 	assign id_store_mask = make_store_mask(id_mem_size, id_mem_addr[2:0]);
 	assign id_store_data = make_store_data(id_mem_size, id_mem_addr[2:0], rs2_val);
 	assign id_fire = id_valid && !mem_pending && !wb_trap_valid;
