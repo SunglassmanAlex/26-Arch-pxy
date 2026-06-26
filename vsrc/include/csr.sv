@@ -52,6 +52,7 @@ package csr_pkg;
   parameter u12 CSR_SIP = 12'h144;
   parameter u12 CSR_SCOUNTEREN = 12'h106;
   parameter u12 CSR_SENVCFG = 12'h10a;
+  parameter u12 CSR_STIMECMP = 12'h14d;
 
   parameter u64 MSTATUS_MASK = 64'h7e79bb;
   parameter u64 SSTATUS_MASK = 64'h80000003000de122;
@@ -60,6 +61,9 @@ package csr_pkg;
   parameter u64 MEDELEG_MASK = 64'hb1ff;
   parameter u64 MIDELEG_MASK = 64'h222;
   parameter u64 MCOUNTINHIBIT_MASK = 64'h5;
+  parameter u64 MENVCFG_STCE_BIT = 64'h8000000000000000;
+  parameter u64 MENVCFG_MASK = MENVCFG_STCE_BIT;
+  parameter u64 SENVCFG_MASK = 64'h0;
 
   typedef struct packed {
     u1 sd;

@@ -94,10 +94,12 @@ module core import common::*;(
 	word_t csr_mcause, csr_mtval, csr_mepc, csr_mcycle, csr_minstret, csr_satp;
 	word_t csr_stvec, csr_sscratch, csr_sepc, csr_scause, csr_stval;
 	word_t csr_medeleg, csr_mideleg, csr_pmpcfg0;
-	word_t csr_mcounteren, csr_scounteren, csr_mcountinhibit;
+	word_t csr_mcounteren, csr_scounteren, csr_mcountinhibit, csr_menvcfg, csr_senvcfg;
+	word_t csr_stimecmp;
 	word_t csr_pmpaddr[PMP_ENTRIES];
 	word_t csr_mhartid;
 	word_t mip_value;
+	logic sstc_stip_pending;
 	logic [1:0] current_priv, fetch_priv;
 	logic bp_valid[BP_ENTRIES];
 	logic [1:0] bp_counter[BP_ENTRIES];
@@ -105,12 +107,13 @@ module core import common::*;(
 	assign priv_mode = current_priv;
 	assign satp = csr_satp;
 	assign mstatus = csr_mstatus;
+	assign sstc_stip_pending = |(csr_menvcfg & MENVCFG_STCE_BIT) && (csr_mcycle >= csr_stimecmp);
 	assign mip_value = (csr_mip & ~MIP_HW_MASK) |
 		(swint ? MIP_MSIP_BIT : 64'd0) |
 		(trint ? MIP_MTIP_BIT : 64'd0) |
 		(exint ? MIP_MEIP_BIT : 64'd0) |
 		((swint && csr_mideleg[1]) ? MIP_SSIP_BIT : 64'd0) |
-		((trint && csr_mideleg[5]) ? MIP_STIP_BIT : 64'd0) |
+		(((trint && csr_mideleg[5]) || sstc_stip_pending) ? MIP_STIP_BIT : 64'd0) |
 		((exint && csr_mideleg[9]) ? MIP_SEIP_BIT : 64'd0);
 
 	assign ireq.valid = if_pending;
@@ -529,8 +532,9 @@ module core import common::*;(
 			CSR_MARCHID,
 			CSR_MIMPID,
 			CSR_MCONFIGPTR,
-			CSR_MENVCFG,
-			CSR_SENVCFG:  csr_read = 64'd0;
+			CSR_MENVCFG: csr_read = csr_menvcfg;
+			CSR_SENVCFG: csr_read = csr_senvcfg;
+			CSR_STIMECMP: csr_read = csr_stimecmp;
 			CSR_MHARTID:  csr_read = csr_mhartid;
 			CSR_MEDELEG:  csr_read = csr_medeleg;
 			CSR_MIDELEG:  csr_read = csr_mideleg;
@@ -557,7 +561,7 @@ module core import common::*;(
 			CSR_SATP, CSR_CYCLE, CSR_TIME, CSR_INSTRET,
 			CSR_MCYCLE, CSR_MINSTRET, CSR_MISA, CSR_MVENDORID,
 			CSR_MARCHID, CSR_MIMPID, CSR_MCONFIGPTR, CSR_MHARTID,
-			CSR_MENVCFG, CSR_SENVCFG,
+			CSR_MENVCFG, CSR_SENVCFG, CSR_STIMECMP,
 			CSR_MEDELEG, CSR_MIDELEG, CSR_PMPADDR0, CSR_PMPADDR1,
 			CSR_PMPADDR2, CSR_PMPADDR3, CSR_PMPADDR4, CSR_PMPADDR5,
 			CSR_PMPADDR6, CSR_PMPADDR7, CSR_PMPCFG0:
@@ -742,7 +746,7 @@ module core import common::*;(
 	word_t id_csr_rdata, id_csr_src, id_csr_wdata;
 	logic id_csr_wen;
 	logic id_csr_legal, id_instr_legal;
-	logic id_csr_blocked_by_tvm, id_sret_legal, id_wfi_legal;
+	logic id_csr_blocked_by_tvm, id_csr_blocked_by_sstc, id_sret_legal, id_wfi_legal;
 	logic id_is_lr, id_is_sc, id_sc_success;
 	logic [4:0] id_amo_op;
 	logic id_control_misaligned, id_load_misaligned, id_store_misaligned;
@@ -1272,6 +1276,10 @@ module core import common::*;(
 		(current_priv == PRIV_S) &&
 		|(csr_mstatus & MSTATUS_TVM_BIT) &&
 		(id_csr_addr == CSR_SATP);
+	assign id_csr_blocked_by_sstc =
+		(current_priv == PRIV_S) &&
+		(id_csr_addr == CSR_STIMECMP) &&
+		!(|(csr_menvcfg & MENVCFG_STCE_BIT));
 	assign id_sret_legal =
 		id_is_sret && (current_priv != PRIV_U) &&
 		!((current_priv == PRIV_S) && |(csr_mstatus & MSTATUS_TSR_BIT));
@@ -1282,6 +1290,7 @@ module core import common::*;(
 		(current_priv >= id_csr_addr[9:8]) &&
 		!((id_csr_addr[11:10] == 2'b11) && id_csr_wen) &&
 		!id_csr_blocked_by_tvm &&
+		!id_csr_blocked_by_sstc &&
 		counter_csr_access_allowed(id_csr_addr, current_priv);
 	assign id_instr_legal =
 		(id_wen && !id_is_csr) || id_is_store || id_is_branch ||
@@ -1763,6 +1772,9 @@ module core import common::*;(
 			csr_mcounteren <= '0;
 			csr_scounteren <= '0;
 			csr_mcountinhibit <= '0;
+			csr_menvcfg <= '0;
+			csr_senvcfg <= '0;
+			csr_stimecmp <= 64'hffff_ffff_ffff_ffff;
 			for (int entry = 0; entry < PMP_ENTRIES; entry += 1) begin
 				csr_pmpaddr[entry] <= '0;
 			end
@@ -1816,6 +1828,9 @@ module core import common::*;(
 					CSR_MCOUNTEREN: csr_mcounteren <= wb_csr_wdata & COUNTEREN_MASK;
 					CSR_SCOUNTEREN: csr_scounteren <= wb_csr_wdata & COUNTEREN_MASK;
 					CSR_MCOUNTINHIBIT: csr_mcountinhibit <= wb_csr_wdata & MCOUNTINHIBIT_MASK;
+					CSR_MENVCFG:  csr_menvcfg <= wb_csr_wdata & MENVCFG_MASK;
+					CSR_SENVCFG:  csr_senvcfg <= wb_csr_wdata & SENVCFG_MASK;
+					CSR_STIMECMP: csr_stimecmp <= wb_csr_wdata;
 					CSR_MSCRATCH: csr_mscratch <= wb_csr_wdata;
 					CSR_SSCRATCH: csr_sscratch <= wb_csr_wdata;
 					CSR_MEPC:     csr_mepc <= wb_csr_wdata;

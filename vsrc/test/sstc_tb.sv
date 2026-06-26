@@ -4,13 +4,14 @@
 `include "src/core.sv"
 `endif
 
-module csr_envcfg_tb
+module sstc_tb
     import common::*;
     import csr_pkg::*;
 ;
     localparam logic [1:0] PRIV_S = 2'b01;
     localparam addr_t S_PC = 64'h0000_0000_0000_0040;
-    localparam u32 MRET = 32'h3020_0073;
+    localparam addr_t S_HANDLER_PC = 64'h0000_0000_0000_0080;
+    localparam word_t S_TIMER_CAUSE = 64'h8000_0000_0000_0005;
 
     logic clk, reset;
     ibus_req_t ireq;
@@ -58,34 +59,29 @@ module csr_envcfg_tb
         lui = {imm, rd, 7'b0110111};
     endfunction
 
-    function automatic u32 csrr(input u5 rd, input u12 csr);
-        csrr = {csr, 5'd0, 3'b010, rd, 7'b1110011};
-    endfunction
-
     function automatic u32 csrw(input u12 csr, input u5 rs1);
         csrw = {csr, rs1, 3'b001, 5'd0, 7'b1110011};
     endfunction
 
     function automatic u32 instr_at(input addr_t addr);
         unique case (addr)
-            PCINIT + 64'h00: instr_at = csrr(5'd5, CSR_MCONFIGPTR);
-            PCINIT + 64'h04: instr_at = csrr(5'd6, CSR_MENVCFG);
-            PCINIT + 64'h08: instr_at = csrr(5'd7, CSR_SENVCFG);
-            PCINIT + 64'h0c: instr_at = addi(5'd1, 5'd0, -12'sd1);
-            PCINIT + 64'h10: instr_at = csrw(CSR_MENVCFG, 5'd1);
-            PCINIT + 64'h14: instr_at = csrw(CSR_SENVCFG, 5'd1);
-            PCINIT + 64'h18: instr_at = csrr(5'd8, CSR_MENVCFG);
-            PCINIT + 64'h1c: instr_at = csrr(5'd9, CSR_SENVCFG);
+            PCINIT + 64'h00: instr_at = addi(5'd1, 5'd0, -12'sd1);
+            PCINIT + 64'h04: instr_at = csrw(CSR_MENVCFG, 5'd1);
+            PCINIT + 64'h08: instr_at = csrw(CSR_STIMECMP, 5'd1);
+            PCINIT + 64'h0c: instr_at = addi(5'd1, 5'd0, 12'sh020);
+            PCINIT + 64'h10: instr_at = csrw(CSR_MIDELEG, 5'd1);
+            PCINIT + 64'h14: instr_at = csrw(CSR_MIE, 5'd1);
+            PCINIT + 64'h18: instr_at = addi(5'd1, 5'd0, 12'sh080);
+            PCINIT + 64'h1c: instr_at = csrw(CSR_STVEC, 5'd1);
             PCINIT + 64'h20: instr_at = addi(5'd1, 5'd0, 12'sh040);
             PCINIT + 64'h24: instr_at = csrw(CSR_MEPC, 5'd1);
             PCINIT + 64'h28: instr_at = lui(5'd1, 20'h00001);
-            PCINIT + 64'h2c: instr_at = addi(5'd1, 5'd1, 12'sh800);
+            PCINIT + 64'h2c: instr_at = addi(5'd1, 5'd1, 12'sh802);
             PCINIT + 64'h30: instr_at = csrw(CSR_MSTATUS, 5'd1);
-            PCINIT + 64'h34: instr_at = MRET;
-            S_PC:            instr_at = csrr(5'd10, CSR_SENVCFG);
-            S_PC + 64'h04:   instr_at = csrw(CSR_SENVCFG, 5'd1);
-            S_PC + 64'h08:   instr_at = csrr(5'd11, CSR_SENVCFG);
-            S_PC + 64'h0c:   instr_at = addi(5'd12, 5'd0, 12'sh001);
+            PCINIT + 64'h34: instr_at = 32'h3020_0073;
+            S_PC:            instr_at = csrw(CSR_STIMECMP, 5'd0);
+            S_PC + 64'h04:   instr_at = addi(5'd5, 5'd0, 12'sh001);
+            S_HANDLER_PC:    instr_at = addi(5'd6, 5'd0, 12'sh001);
             default:         instr_at = addi(5'd0, 5'd0, 12'sh000);
         endcase
     endfunction
@@ -129,31 +125,28 @@ module csr_envcfg_tb
         repeat (3) @(posedge clk);
         reset = 1'b0;
 
-        for (int cycle = 0; cycle < 160; cycle += 1) begin
+        for (int cycle = 0; cycle < 180; cycle += 1) begin
             @(posedge clk);
-            if (dut.gpr[12] == 64'd1) begin
+            if (dut.gpr[6] == 64'd1) begin
                 if (priv_mode != PRIV_S) begin
-                    $fatal(1, "S-mode envcfg sequence finished outside S-mode");
+                    $fatal(1, "Sstc handler finished outside S-mode");
+                end
+                if (dut.csr_scause != S_TIMER_CAUSE) begin
+                    $fatal(1, "Sstc scause=%h expected %h", dut.csr_scause, S_TIMER_CAUSE);
+                end
+                if (dut.csr_sepc != (S_PC + 64'h04)) begin
+                    $fatal(1, "Sstc sepc=%h expected %h", dut.csr_sepc, S_PC + 64'h04);
                 end
                 if (dut.gpr[5] != 64'd0) begin
-                    $fatal(1, "mconfigptr expected 0, got %h", dut.gpr[5]);
+                    $fatal(1, "instruction after expired stimecmp unexpectedly committed");
                 end
-                if ((dut.gpr[6] != 64'd0) || (dut.gpr[7] != 64'd0)) begin
-                    $fatal(1, "initial envcfg read expected 0: menvcfg=%h senvcfg=%h",
-                        dut.gpr[6], dut.gpr[7]);
+                if (dut.csr_stimecmp != 64'd0) begin
+                    $fatal(1, "S-mode stimecmp write did not commit: %h", dut.csr_stimecmp);
                 end
-                if ((dut.gpr[8] != MENVCFG_STCE_BIT) || (dut.gpr[9] != 64'd0)) begin
-                    $fatal(1, "envcfg writes should keep only menvcfg.STCE: menvcfg=%h senvcfg=%h",
-                        dut.gpr[8], dut.gpr[9]);
-                end
-                if ((dut.gpr[10] != 64'd0) || (dut.gpr[11] != 64'd0)) begin
-                    $fatal(1, "S-mode senvcfg read/write should remain zero: before=%h after=%h",
-                        dut.gpr[10], dut.gpr[11]);
-                end
-                $display("csr_mconfigptr_read_zero [OK]");
-                $display("csr_menvcfg_stce_warl [OK]");
-                $display("csr_senvcfg_smode_access [OK]");
-                $display("CSR envcfg directed test passed.");
+                $display("sstc_menvcfg_stce [OK]");
+                $display("sstc_smode_stimecmp_write [OK]");
+                $display("sstc_supervisor_timer_interrupt [OK]");
+                $display("Sstc directed test passed.");
                 $finish;
             end
             if (dut.csr_mcause == 64'd2) begin
@@ -161,7 +154,7 @@ module csr_envcfg_tb
             end
         end
 
-        $fatal(1, "timed out waiting for envcfg CSR test completion");
+        $fatal(1, "timed out waiting for Sstc timer interrupt");
     end
 
     `UNUSED_OK({satp, mstatus, dreq, if_flush});
