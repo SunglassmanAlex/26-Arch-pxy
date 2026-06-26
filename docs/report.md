@@ -349,7 +349,7 @@ MicroBench 在 diff 模式下运行较慢，本轮分支预测后完成了 qsort
 静态预测后: [queen] min time: 5 ms [94140]
 ```
 
-动态 BHT 增量完成后，已重跑 `make test-labplus-3` 快速回归，`atomicity.bin` 仍为 `instrCnt=55, cycleCnt=197, IPC=0.279188`。该用例几乎不包含可重复训练的条件分支，因此周期数与静态预测阶段一致；Lab1/Lab4 和完整 MicroBench 的动态 BHT 重新采样留到后续长时间回归窗口执行。
+动态 BHT 增量完成后，已重跑 `make test-labplus-3` 快速回归，`atomicity.bin` 仍为 `instrCnt=55, cycleCnt=197, IPC=0.279188`。同时复用当前仿真器重跑 Lab1 extra 和 Lab4，结果分别仍为 `cycleCnt=93020` 与 `cycleCnt=110572`。这些短样本几乎没有吃到动态训练收益，因此周期数与静态预测阶段一致；完整 MicroBench 的动态 BHT 重新采样留到后续长时间回归窗口执行。
 
 `lab+/4 TEST=all` 中的 benchmark 结果：
 
@@ -1216,7 +1216,7 @@ timing status: constraints not met, usable for bring-up observation but should b
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path、8B 指令行缓冲和 32 项 2-bit BHT 动态分支预测等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。上板调试中先后修复了 UART 自动字符串发送时 `txData` 中途覆盖、`Hello World` 大小写不一致、TX_DATA backpressure 隔字丢失，以及 BRAM read response stale-ready 导致第二行 `R` 后取指错误的问题。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93020，将 Lab4 周期数从 208529 降到 110572，atomicity 从 372 降到 197。最终 atomicity 已完成动态 BHT 增量快速回归；Lab+ privileged sys-test、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、Lab1 extra、Lab4、MMU page fault、CLINT/PLIC/UART/virtio/xv6 smoke、Vivado pre-board、Nexys4 board device、`soc_top` board trace、Lab5、Lab6 沿用前序回归结果。
+本次 Lab+ 新增完成了 atomic extension、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path、8B 指令行缓冲和 32 项 2-bit BHT 动态分支预测等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、单 queue virtqueue/非 0 QueueSel guard/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/overrun/parity/framing/break/break-only/modem-status 模型，以及独立 MMU page fault、S interrupt、SFENCE.VMA、WFI、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。上板调试中先后修复了 UART 自动字符串发送时 `txData` 中途覆盖、`Hello World` 大小写不一致、TX_DATA backpressure 隔字丢失，以及 BRAM read response stale-ready 导致第二行 `R` 后取指错误的问题。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93020，将 Lab4 周期数从 208529 降到 110572，atomicity 从 372 降到 197。最终 atomicity、Lab1 extra 和 Lab4 已完成动态 BHT 增量快速回归；Lab+ privileged sys-test、S-mode interrupt directed test、SFENCE.VMA directed test、WFI directed test、MMU page fault、CLINT/PLIC/UART/virtio/xv6 smoke、Vivado pre-board、Nexys4 board device、`soc_top` board trace、Lab5、Lab6 沿用前序回归结果。
 
 ## 10. AI 使用说明
 
