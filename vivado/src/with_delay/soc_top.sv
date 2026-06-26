@@ -24,6 +24,7 @@ module mycpu_top_single
 	output logic [1:0] burst,
 	output logic [7:0] len,
 	output logic [2:0] size,
+	output logic debug_is_instr,
 
 	input logic ready,
 	input logic last
@@ -109,6 +110,7 @@ module mycpu_top_single
 	assign burst = oreq.burst;
 	assign len = oreq.len;
 	assign size = oreq.size;
+	assign debug_is_instr = oreq.is_instr;
 
 	assign oresp.data = rdata;
 	assign oresp.paddr = oreq.addr;
@@ -136,6 +138,7 @@ module soc_top #(
 	logic ready;
 	logic last;
 	logic [2:0] size;
+	logic debug_is_instr;
 
 	logic ram_valid;
 	logic [63:0] ram_addr;
@@ -162,6 +165,14 @@ module soc_top #(
 	logic bus_seen;
 	logic uart_seen;
 	logic finish_seen;
+	logic fetch_start_seen;
+	logic fetch_after_start_seen;
+	logic fetch_main_seen;
+	logic fetch_print_seen;
+	logic ram_instr_seen;
+	logic ram_data_seen;
+	logic device_read_seen;
+	logic device_write_seen;
 	localparam int unsigned BOARD_UART_BIT_TMR_MAX = 2603;
 
 	/* mycpu */
@@ -176,6 +187,7 @@ module soc_top #(
 		.burst(burst),
 		.len(len),
 		.size(size),
+		.debug_is_instr(debug_is_instr),
 		.ready(ready),
 		.last(last)
 	);
@@ -238,14 +250,40 @@ module soc_top #(
 			bus_seen <= 1'b0;
 			uart_seen <= 1'b0;
 			finish_seen <= 1'b0;
+			fetch_start_seen <= 1'b0;
+			fetch_after_start_seen <= 1'b0;
+			fetch_main_seen <= 1'b0;
+			fetch_print_seen <= 1'b0;
+			ram_instr_seen <= 1'b0;
+			ram_data_seen <= 1'b0;
+			device_read_seen <= 1'b0;
+			device_write_seen <= 1'b0;
 		end else begin
 			bus_seen <= bus_seen | valid;
 			uart_seen <= uart_seen | (device_valid && device_wvalid && device_addr == 64'h4060_0004);
 			finish_seen <= finish_seen | (device_valid && device_wvalid && device_addr == 64'h2333_3000);
+			fetch_start_seen <= fetch_start_seen | (valid && debug_is_instr && addr == 64'h8000_0000);
+			fetch_after_start_seen <= fetch_after_start_seen | (valid && debug_is_instr && addr >= 64'h8000_0028);
+			fetch_main_seen <= fetch_main_seen | (valid && debug_is_instr && addr >= 64'h8000_0fbc);
+			fetch_print_seen <= fetch_print_seen | (valid && debug_is_instr && addr >= 64'h8000_102c);
+			ram_instr_seen <= ram_instr_seen | (ram_valid && debug_is_instr);
+			ram_data_seen <= ram_data_seen | (ram_valid && !debug_is_instr);
+			device_read_seen <= device_read_seen | (device_valid && !device_wvalid);
+			device_write_seen <= device_write_seen | (device_valid && device_wvalid);
 		end
 	end
 
-	assign led = sw[3] ? {finish_seen | uart_seen, bus_seen, ~soc_reset, clk_wiz_locked} : device_led;
+	always_comb begin
+		if (!sw[3]) begin
+			led = device_led;
+		end else if (sw[2]) begin
+			led = {device_write_seen, device_read_seen, ram_data_seen, ram_instr_seen};
+		end else if (sw[1]) begin
+			led = {fetch_print_seen, fetch_main_seen, fetch_after_start_seen, fetch_start_seen};
+		end else begin
+			led = {finish_seen | uart_seen, bus_seen, ~soc_reset, clk_wiz_locked};
+		end
+	end
 	
 
 endmodule
