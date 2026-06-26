@@ -21,8 +21,16 @@ module xv6_platform_smoke_tb
     localparam addr_t UART_LSR       = UART_BASE + 64'h5;
     localparam addr_t VIRTIO_BASE    = 64'h0000_0000_1000_1000;
     localparam addr_t DMA_ADDR       = 64'h0000_0000_8000_3000;
+    localparam addr_t VQ_DESC_ADDR   = 64'h0000_0000_8000_4000;
+    localparam addr_t VQ_AVAIL_ADDR  = 64'h0000_0000_8000_4100;
+    localparam addr_t VQ_USED_ADDR   = 64'h0000_0000_8000_4200;
+    localparam addr_t VQ_REQ_ADDR    = 64'h0000_0000_8000_4300;
+    localparam addr_t VQ_BUF_ADDR    = 64'h0000_0000_8000_4400;
+    localparam addr_t VQ_STATUS_ADDR = 64'h0000_0000_8000_4600;
     localparam int VIRTIO_IRQ = 1;
     localparam int UART_IRQ = 10;
+    localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
+    localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
 
     logic clk, reset;
     cbus_req_t oreq;
@@ -208,10 +216,80 @@ module xv6_platform_smoke_tb
         $display("%s [OK]", name);
     endtask
 
+    function automatic word_t simple_blk_default_word(input int idx);
+        simple_blk_default_word = 64'h5342_4c4b_0000_0000 | 64'(idx);
+    endfunction
+
+    task automatic write_virtq_desc(
+        input int index,
+        input addr_t desc_addr,
+        input u32 desc_len,
+        input u16 desc_flags,
+        input u16 desc_next
+    );
+        addr_t base;
+        begin
+            base = VQ_DESC_ADDR + 64'(index) * 64'd16;
+            write64(base, desc_addr);
+            write32(base + 64'd8, desc_len);
+            write32(base + 64'd12, {desc_next, desc_flags});
+        end
+    endtask
+
+    task automatic write_blk_request(input u32 req_type, input word_t sector);
+        write32(VQ_REQ_ADDR, req_type);
+        write32(VQ_REQ_ADDR + 64'd4, 32'd0);
+        write64(VQ_REQ_ADDR + 64'd8, sector);
+    endtask
+
     task automatic trigger_virtio_irq();
         write64(VIRTIO_BASE + 64'h100, 64'd0);
         write64(VIRTIO_BASE + 64'h108, DMA_ADDR);
         write64(VIRTIO_BASE + 64'h110, 64'd1);
+    endtask
+
+    task automatic trigger_virtio_queue_read();
+        word_t data;
+        begin
+            write32(VIRTIO_BASE + 64'h030, 32'd0);
+            write32(VIRTIO_BASE + 64'h038, 32'd8);
+            write32(VIRTIO_BASE + 64'h080, VQ_DESC_ADDR[31:0]);
+            write32(VIRTIO_BASE + 64'h084, VQ_DESC_ADDR[63:32]);
+            write32(VIRTIO_BASE + 64'h090, VQ_AVAIL_ADDR[31:0]);
+            write32(VIRTIO_BASE + 64'h094, VQ_AVAIL_ADDR[63:32]);
+            write32(VIRTIO_BASE + 64'h0a0, VQ_USED_ADDR[31:0]);
+            write32(VIRTIO_BASE + 64'h0a4, VQ_USED_ADDR[63:32]);
+            write32(VIRTIO_BASE + 64'h044, 32'd1);
+
+            write32(VQ_AVAIL_ADDR, 32'd0);
+            write32(VQ_AVAIL_ADDR + 64'd4, 32'd0);
+            write32(VQ_USED_ADDR, 32'd0);
+            write32(VQ_USED_ADDR + 64'd4, 32'd0);
+            write32(VQ_USED_ADDR + 64'd8, 32'd0);
+            write_blk_request(32'd0, 64'd7);
+            write8(VQ_STATUS_ADDR, 8'hff);
+            write_virtq_desc(0, VQ_REQ_ADDR, 32'd16, VIRTQ_DESC_F_NEXT, 16'd1);
+            write_virtq_desc(
+                1, VQ_BUF_ADDR, 32'd512,
+                VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 16'd2
+            );
+            write_virtq_desc(2, VQ_STATUS_ADDR, 32'd1, VIRTQ_DESC_F_WRITE, 16'd0);
+            write32(VQ_AVAIL_ADDR + 64'd4, 32'd0);
+            write32(VQ_AVAIL_ADDR, 32'h0001_0000);
+
+            write32(VIRTIO_BASE + 64'h050, 32'd0);
+            expect8(VQ_STATUS_ADDR, 8'd0, "xv6_smoke_virtio_queue_status");
+            expect32(VQ_USED_ADDR, 32'h0001_0000, "xv6_smoke_virtio_queue_used_idx");
+            expect32(VQ_USED_ADDR + 64'd4, 32'd0, "xv6_smoke_virtio_queue_used_id");
+            expect32(VQ_USED_ADDR + 64'd8, 32'd513, "xv6_smoke_virtio_queue_used_len");
+            read64(VQ_BUF_ADDR, data);
+            if (data !== simple_blk_default_word(7 * 64)) begin
+                $fatal(1, "xv6_smoke_virtio_queue_data read %h expected %h",
+                    data, simple_blk_default_word(7 * 64));
+            end
+            $display("xv6_smoke_virtio_queue_data [OK]");
+            expect32(VIRTIO_BASE + 64'h060, 32'd1, "xv6_smoke_virtio_queue_interrupt");
+        end
     endtask
 
     initial begin
@@ -259,10 +337,11 @@ module xv6_platform_smoke_tb
         write32(PLIC_S_CLAIM, 32'(UART_IRQ));
         expect_irq(1'b0, "xv6_smoke_uart_complete");
 
-        trigger_virtio_irq();
+        trigger_virtio_queue_read();
         expect32(PLIC_PENDING, 32'(1 << VIRTIO_IRQ), "xv6_smoke_virtio_pending");
         expect_irq(1'b1, "xv6_smoke_virtio_exint");
         expect32(PLIC_S_CLAIM, 32'(VIRTIO_IRQ), "xv6_smoke_virtio_s_claim");
+        write32(VIRTIO_BASE + 64'h064, 32'd1);
         write32(PLIC_S_CLAIM, 32'(VIRTIO_IRQ));
         expect_irq(1'b0, "xv6_smoke_virtio_complete");
 
