@@ -22,6 +22,7 @@ no_arguments:
 	@echo "  - test-labplus-sfence: Run Lab+ directed SFENCE.VMA test"
 	@echo "  - test-labplus-wfi: Run Lab+ directed WFI test"
 	@echo "  - test-labplus-counters: Run Lab+ directed CSR counter test"
+	@echo "  - test-labplus-mcountinhibit: Run Lab+ directed mcountinhibit CSR test"
 	@echo "  - test-labplus-csr-id: Run Lab+ directed machine-id/ISA CSR test"
 	@echo "  - test-labplus-csr-envcfg: Run Lab+ directed envcfg CSR test"
 	@echo "  - test-labplus-amo-d: Run Lab+ directed AMO.D test"
@@ -174,6 +175,14 @@ test-labplus-counters:
 	  vsrc/test/difftest_stubs.sv vsrc/test/csr_counter_tb.sv
 	./build/csr-counter/csr_counter_tb
 
+test-labplus-mcountinhibit:
+	rm -rf build/csr-mcountinhibit
+	verilator --binary --timing --top-module csr_mcountinhibit_tb \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/csr-mcountinhibit -o csr_mcountinhibit_tb \
+	  vsrc/test/difftest_stubs.sv vsrc/test/csr_mcountinhibit_tb.sv
+	./build/csr-mcountinhibit/csr_mcountinhibit_tb
+
 test-labplus-csr-id:
 	rm -rf build/csr-machine-id
 	verilator --binary --timing --top-module csr_machine_id_tb \
@@ -294,6 +303,7 @@ test-labplus-preboard:
 	$(MAKE) test-labplus-sfence
 	$(MAKE) test-labplus-wfi
 	$(MAKE) test-labplus-counters
+	$(MAKE) test-labplus-mcountinhibit
 	$(MAKE) test-labplus-csr-id
 	$(MAKE) test-labplus-csr-envcfg
 	$(MAKE) test-labplus-amo-d
@@ -331,4 +341,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-ssoftint test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-mcountinhibit test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-ssoftint test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check

@@ -19,6 +19,7 @@ package csr_pkg;
   parameter u12 CSR_MENVCFG = 12'h30a;
   parameter u12 CSR_MTVEC = 12'h305;
   parameter u12 CSR_MCOUNTEREN = 12'h306;
+  parameter u12 CSR_MCOUNTINHIBIT = 12'h320;
   parameter u12 CSR_MSTATUS = 12'h300;
   parameter u12 CSR_MSCRATCH = 12'h340;
   parameter u12 CSR_MEPC = 12'h341;
@@ -58,6 +59,7 @@ package csr_pkg;
   parameter u64 MTVEC_MASK = ~(64'h2);
   parameter u64 MEDELEG_MASK = 64'hb1ff;
   parameter u64 MIDELEG_MASK = 64'h222;
+  parameter u64 MCOUNTINHIBIT_MASK = 64'h5;
 
   typedef struct packed {
     u1 sd;

@@ -91,7 +91,7 @@ module core import common::*;(
 	word_t csr_mcause, csr_mtval, csr_mepc, csr_mcycle, csr_minstret, csr_satp;
 	word_t csr_stvec, csr_sscratch, csr_sepc, csr_scause, csr_stval;
 	word_t csr_medeleg, csr_mideleg, csr_pmpcfg0;
-	word_t csr_mcounteren, csr_scounteren;
+	word_t csr_mcounteren, csr_scounteren, csr_mcountinhibit;
 	word_t csr_pmpaddr[PMP_ENTRIES];
 	word_t csr_mhartid;
 	word_t mip_value;
@@ -506,6 +506,7 @@ module core import common::*;(
 			CSR_SIE:      csr_read = csr_mie & MIP_S_MASK;
 			CSR_MCOUNTEREN: csr_read = csr_mcounteren;
 			CSR_SCOUNTEREN: csr_read = csr_scounteren;
+			CSR_MCOUNTINHIBIT: csr_read = csr_mcountinhibit;
 			CSR_MSCRATCH: csr_read = csr_mscratch;
 			CSR_SSCRATCH: csr_read = csr_sscratch;
 			CSR_MEPC:     csr_read = csr_mepc;
@@ -547,7 +548,7 @@ module core import common::*;(
 		unique case (id)
 			CSR_MSTATUS, CSR_SSTATUS, CSR_MTVEC, CSR_STVEC,
 			CSR_MIP, CSR_SIP, CSR_MIE, CSR_SIE,
-			CSR_MCOUNTEREN, CSR_SCOUNTEREN,
+			CSR_MCOUNTEREN, CSR_SCOUNTEREN, CSR_MCOUNTINHIBIT,
 			CSR_MSCRATCH, CSR_SSCRATCH, CSR_MEPC, CSR_SEPC,
 			CSR_MCAUSE, CSR_SCAUSE, CSR_MTVAL, CSR_STVAL,
 			CSR_SATP, CSR_CYCLE, CSR_TIME, CSR_INSTRET,
@@ -1745,6 +1746,7 @@ module core import common::*;(
 			csr_mideleg <= '0;
 			csr_mcounteren <= '0;
 			csr_scounteren <= '0;
+			csr_mcountinhibit <= '0;
 			for (int entry = 0; entry < PMP_ENTRIES; entry += 1) begin
 				csr_pmpaddr[entry] <= '0;
 			end
@@ -1753,8 +1755,12 @@ module core import common::*;(
 			current_priv <= PRIV_M;
 		end
 		else begin
-			csr_mcycle <= csr_mcycle + 64'd1;
-			csr_minstret <= csr_minstret + ((wb_valid && !wb_trap_valid) ? 64'd1 : 64'd0);
+			if (!csr_mcountinhibit[0]) begin
+				csr_mcycle <= csr_mcycle + 64'd1;
+			end
+			if (!csr_mcountinhibit[2]) begin
+				csr_minstret <= csr_minstret + ((wb_valid && !wb_trap_valid) ? 64'd1 : 64'd0);
+			end
 			csr_mhartid <= '0;
 			if (wb_trap_valid) begin
 				if (wb_trap_to_s) begin
@@ -1793,6 +1799,7 @@ module core import common::*;(
 					CSR_SIE:      csr_mie <= (csr_mie & ~MIP_S_MASK) | (wb_csr_wdata & MIP_S_MASK);
 					CSR_MCOUNTEREN: csr_mcounteren <= wb_csr_wdata & COUNTEREN_MASK;
 					CSR_SCOUNTEREN: csr_scounteren <= wb_csr_wdata & COUNTEREN_MASK;
+					CSR_MCOUNTINHIBIT: csr_mcountinhibit <= wb_csr_wdata & MCOUNTINHIBIT_MASK;
 					CSR_MSCRATCH: csr_mscratch <= wb_csr_wdata;
 					CSR_SSCRATCH: csr_sscratch <= wb_csr_wdata;
 					CSR_MEPC:     csr_mepc <= wb_csr_wdata;
