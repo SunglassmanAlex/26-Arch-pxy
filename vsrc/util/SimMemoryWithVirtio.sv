@@ -41,7 +41,7 @@ module SimMemoryWithVirtio
     localparam addr_t VIRTIO_MASK = 64'hffff_ffff_ffff_fe00;
     localparam word_t VIRTIO_MAGIC_VERSION = {32'd2, 32'h7472_6976};
     localparam word_t VIRTIO_DEVICE_VENDOR = {32'h554d_4551, 32'd2};
-    localparam int VIRTIO_QUEUES = 2;
+    localparam int VIRTIO_QUEUES = 4;
     localparam int VIRTQ_NUM_MAX = 8;
     localparam u16 VIRTQ_DESC_F_NEXT = 16'h0001;
     localparam u16 VIRTQ_DESC_F_WRITE = 16'h0002;
