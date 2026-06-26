@@ -31,7 +31,7 @@
 - 新增仿真侧 CLINT 地址兼容：`SimMemoryWithVirtio` 将 QEMU/xv6 `0x0200...` 的 `msip/mtimecmp/mtime` 地址映射到课程框架 `0x3800...` 地址。
 - 新增仿真侧 PLIC MMIO 模型：支持 source priority、pending、M/S enable、M/S threshold、claim/complete，并将 simple virtio block 完成事件接到 PLIC source 1、UART 事件接到 PLIC source 10。
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、LSR overrun/parity/framing/break、break-only line-status 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
-- 新增 xv6/QEMU platform smoke 集成测试：在同一个 `SimMemoryWithVirtio` 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、标准 virtqueue read 后 claim virtio 中断、virtio/uart 多源优先级仲裁和 complete 清中断路径。
+- 新增 xv6/QEMU platform smoke 集成测试：在同一个 `SimMemoryWithVirtio` 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、标准 virtqueue read/write/readback 后 claim virtio 中断、virtio/uart 多源优先级仲裁和 complete 清中断路径。
 - 新增 Vivado 上板前静态检查：解析 `project_1.xpr`、Nexys4 DDR XDC 和顶层 wrapper，确认 part、工程文件、约束端口管脚和 `basys3_top` 兼容包装没有跑偏；同时检查已有 bitstream、route status、routed DRC 和 timing summary，确认 route errors=0、DRC violations=0，并在 WNS 或 timing constraints 未收敛时给出 warning。
 - 扩展 Vivado/preboard 检查：自动打印当前 `.bit` 的 path、size、mtime、SHA256、`.bin` 缺失提示和 timing WNS，提示 `.bit` 是否旧于 Vivado 输入文件，并固化板级 UART 的 `Hello World!\r\n\0` ROM、9600 baud tick、10 bit frame、`txData` idle guard、TX ready gate 和 BRAM read response 一拍清除，便于上板时比对烧写文件并提前发现串口/BRAM 握手回归。
 - 新增 Vivado bitstream 重建入口：提供 `tools/rebuild_nexys4_bitstream.tcl` 和 `make vivado-nexys4-bitstream`，用于在安装 Vivado 的机器上重新跑 `synth_1/impl_1` 并生成最新 Nexys4 DDR `.bit`。
@@ -441,7 +441,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
 - `vsrc/test/simple_virtio_block_tb.sv`、`vsrc/test/ram_dpi_stubs.cpp`
   - 新增 simple-block 定向测试和测试用 RAM DPI stub，验证镜像初始化、virtio-blk config 字段、`ConfigGeneration`、queue 1 独立配置和 `QueueNotify=1` read 请求、queue 0 状态不被 queue 1 污染、未知命令/越界 sector 错误状态、block/ring feature negotiation、virtqueue read/write、indirect descriptor read、一次 `QueueNotify` 多 pending entry、`InterruptACK` 清 PLIC pending、event idx 抑制/触发中断、xv6 风格普通 avail flags 中断控制、`VIRTIO_BLK_T_FLUSH` 两段链、`VIRTIO_BLK_T_WRITE_ZEROES` 清零 sector、`VIRTIO_BLK_T_DISCARD` no-op 成功、`Status=0` reset、512B sector write/read。
 - `vsrc/test/xv6_platform_smoke_tb.sv`
-  - 新增 xv6/QEMU platform smoke 集成测试，直接访问 QEMU 地址下的 CLINT、PLIC S context、16550 UART 和 virtio-mmio，验证 `msip/mtimecmp/mtime` 中断源、PLIC S enable/threshold/claim、UART RX interrupt claim 后 RBR 读取、标准 virtqueue read 的 status/used ring/data/interrupt status、virtio source 1 interrupt，以及 virtio/UART 同时 pending 时按 priority 仲裁并逐个 complete。
+  - 新增 xv6/QEMU platform smoke 集成测试，直接访问 QEMU 地址下的 CLINT、PLIC S context、16550 UART 和 virtio-mmio，验证 `msip/mtimecmp/mtime` 中断源、PLIC S enable/threshold/claim、UART RX interrupt claim 后 RBR 读取、标准 virtqueue read/write/readback 的 status/used ring/data/interrupt status、virtio source 1 interrupt，以及 virtio/UART 同时 pending 时按 priority 仲裁并逐个 complete。
 - `vsrc/test/board_device_tb.sv`
   - 新增 Nexys4 board device 定向测试，实例化 `device #(.SIMULATION(0))`，验证 reset 后 LED/TX idle、SW MMIO 读数、finish LED 点亮和 9600 baud UART bit-level 采样出的 `Hello World!\r\n`。
 - `vsrc/test/board_soc_trace_tb.sv`
@@ -1054,15 +1054,27 @@ xv6_smoke_virtio_queue_used_len [OK]
 xv6_smoke_virtio_queue_data [OK]
 xv6_smoke_virtio_queue_interrupt [OK]
 xv6_smoke_virtio_s_claim [OK]
+xv6_smoke_virtio_write_status [OK]
+xv6_smoke_virtio_write_used_idx [OK]
+xv6_smoke_virtio_write_used_id [OK]
+xv6_smoke_virtio_write_used_len [OK]
+xv6_smoke_virtio_write_buffer [OK]
+xv6_smoke_virtio_write_s_claim [OK]
+xv6_smoke_virtio_readback_status [OK]
+xv6_smoke_virtio_readback_used_idx [OK]
+xv6_smoke_virtio_readback_used_id [OK]
+xv6_smoke_virtio_readback_used_len [OK]
+xv6_smoke_virtio_readback_data [OK]
+xv6_smoke_virtio_readback_s_claim [OK]
 xv6_smoke_multi_claim_virtio_first [OK]
 xv6_smoke_multi_claim_uart_second [OK]
 xv6_smoke_multi_complete [OK]
 xv6 platform smoke test passed.
 ```
 
-该测试在一个 `SimMemoryWithVirtio` 实例中覆盖 xv6/QEMU 常见平台路径：先用 `0x0200...` CLINT 地址验证软件中断和时钟中断；再配置 PLIC S context 的 enable/threshold；随后模拟 16550 UART 初始化、host 注入字符、PLIC S claim、claim 后读 RBR 和 complete；再配置 virtio queue 0，在 RAM 中构造 blk read 的 request/data/status 三段 descriptor 链，通过 `QueueNotify=0` 完成一次 sector 7 read，检查 status byte、used ring、读回数据、virtio interrupt status 和 PLIC claim/complete；最后同时置位 virtio 和 UART，确认 higher priority 的 virtio 先被 claim，UART 作为剩余 pending source 继续被 claim。测试中 `CBus` 读任务在本地 MMIO side-effect 时钟沿之前采样 `oresp.data`，避免 RBR 读副作用先清 FIFO 导致数据丢失。
+该测试在一个 `SimMemoryWithVirtio` 实例中覆盖 xv6/QEMU 常见平台路径：先用 `0x0200...` CLINT 地址验证软件中断和时钟中断；再配置 PLIC S context 的 enable/threshold；随后模拟 16550 UART 初始化、host 注入字符、PLIC S claim、claim 后读 RBR 和 complete；再配置 virtio queue 0，在 RAM 中构造 blk read 的 request/data/status 三段 descriptor 链，通过 `QueueNotify=0` 完成一次 sector 7 read，检查 status byte、used ring、读回数据、virtio interrupt status 和 PLIC claim/complete；随后用同一 queue 构造 OUT 写请求写入 sector 8，再构造 IN 读请求读回 sector 8，逐 word 验证数据保持一致，并分别覆盖两次 virtio interrupt/PLIC claim/complete；最后同时置位 virtio 和 UART，确认 higher priority 的 virtio 先被 claim，UART 作为剩余 pending source 继续被 claim。测试中 `CBus` 读任务在本地 MMIO side-effect 时钟沿之前采样 `oresp.data`，避免 RBR 读副作用先清 FIFO 导致数据丢失。
 
-在 virtio/disk MMIO 改成 2 条 split queue 后，已重新运行该 smoke 测试，CLINT、PLIC S context、UART、标准 virtqueue read、virtio source 和多源 pending 仲裁仍全部通过。
+在 virtio/disk MMIO 改成 2 条 split queue 后，已重新运行该 smoke 测试，CLINT、PLIC S context、UART、标准 virtqueue read/write/readback、virtio source 和多源 pending 仲裁仍全部通过。
 
 ### 7.17 Vivado 上板前静态检查
 
