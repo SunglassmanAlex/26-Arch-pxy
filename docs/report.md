@@ -67,9 +67,9 @@
 - 新增 Sstc 定向测试，覆盖 `menvcfg.STCE`、S 态写 `stimecmp` 和 delegated supervisor timer interrupt。
 - 新增 xv6 start CSR 定向测试，覆盖新版 xv6 进入 S-mode 前的主要机器态 CSR 初始化序列。
 - 新增 AMO.D 定向测试，覆盖 `AMOSWAP.D/AMOADD.D/LR.D/SC.D` 成功路径和无 reservation 的 `SC.D` 失败路径。
-- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-mprv`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
-本次新增通过的核心测试为 atomic extension、AMO.D 定向测试、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、S 态软件中断定向测试、S 态外部中断定向测试、M timer from S-mode 定向测试、timervec SSIP handoff 定向测试、Sstc/stimecmp 定向测试、xv6 start CSR 定向测试、SFENCE.VMA 定向测试、WFI 定向测试、mstatus TSR/TW/TVM 定向测试、CSR counter 定向测试、CSR mcountinhibit 定向测试、CSR machine-id 定向测试、CSR envcfg 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 UART 两行前缀 trace。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、AMO.D 定向测试、privileged/PMP sys-test、MMU page fault/MPRV 定向测试、S 态中断定向测试、S 态软件中断定向测试、S 态外部中断定向测试、M timer from S-mode 定向测试、timervec SSIP handoff 定向测试、Sstc/stimecmp 定向测试、xv6 start CSR 定向测试、SFENCE.VMA 定向测试、WFI 定向测试、mstatus TSR/TW/TVM 定向测试、mstatus MPRV 数据权限定向测试、CSR counter 定向测试、CSR mcountinhibit 定向测试、CSR machine-id 定向测试、CSR envcfg 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 UART 两行前缀 trace。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 ## 3. Atomic Extension 设计
 
@@ -462,6 +462,8 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
   - 新增独立 core 级 Verilator testbench，验证 S 态 `WFI` 不触发 illegal trap，后续 `ecall` 能以 S-mode ecall cause 9 进入 M trap；随后再降到 U 态，验证 U 态 `WFI` 触发 illegal instruction trap。
 - `vsrc/test/mstatus_restrict_tb.sv`
   - 新增独立 core 级 Verilator testbench，分别设置 `mstatus.TVM/TW/TSR` 后从 M 态 `mret` 到 S 态，验证受限 `satp` 访问、`SFENCE.VMA`、`WFI` 和 `SRET` 均以 `mcause=2` 进入 M trap。
+- `vsrc/test/mstatus_mprv_tb.sv`
+  - 新增独立 core 级 Verilator testbench，验证 M 态清除 `MPRV` 时同一 PMP 区域仍按 M 态访问放行，设置 `MPRV|MPP=U` 后同一 load 按 U 权限产生 load access fault。
 - `vsrc/test/csr_counter_tb.sv`
   - 新增独立 core 级 Verilator testbench，验证 M/U 态可读 `cycle/time/instret`、M 态可写 `mcounteren/scounteren`，并验证 U 态写只读 `cycle` 产生 illegal instruction trap。
 - `vsrc/test/csr_machine_id_tb.sv`
