@@ -24,6 +24,7 @@ no_arguments:
 	@echo "  - test-labplus-xv6smoke: Run Lab+ xv6 platform MMIO smoke test"
 	@echo "  - test-labplus-vivado-precheck: Run Lab+ Vivado project static pre-board check"
 	@echo "  - test-labplus-board-device: Run Lab+ Nexys4 board device UART/LED test"
+	@echo "  - test-labplus-board-soc-trace: Run Nexys4 soc_top trace simulation"
 	@echo "  - test-labplus-preboard: Run Lab+ non-Vivado pre-board regression"
 	@echo "  - vivado-nexys4-bitstream: Rebuild Nexys4 DDR bitstream with Vivado"
 	@echo "  - vivado-nexys4-program: Program Nexys4 DDR bitstream with Vivado Hardware Manager"
@@ -196,6 +197,18 @@ test-labplus-board-device:
 	  vsrc/test/board_device_tb.sv vivado/src/device.sv
 	./build/board-device/board_device_tb
 
+test-labplus-board-soc-trace:
+	rm -rf build/board-soc-trace
+	CCACHE_DISABLE=1 verilator --binary --timing --trace-fst --top-module board_soc_trace_tb \
+	  -Wno-WIDTHEXPAND -Wno-UNOPTFLAT \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc -I$(NOOP_HOME)/vivado/src \
+	  -I$(NOOP_HOME)/vivado/src/with_delay \
+	  -Mdir build/board-soc-trace -o board_soc_trace_tb \
+	  vsrc/test/difftest_stubs.sv vsrc/test/board_soc_trace_tb.sv \
+	  vivado/src/device.sv vivado/src/with_delay/cbus_crossbar.sv \
+	  vivado/src/with_delay/bram_wrapper.sv vivado/src/with_delay/soc_top.sv
+	./build/board-soc-trace/board_soc_trace_tb
+
 test-labplus-preboard:
 	$(MAKE) test-labplus-vivado-precheck
 	$(MAKE) test-labplus-board-device
@@ -237,4 +250,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check

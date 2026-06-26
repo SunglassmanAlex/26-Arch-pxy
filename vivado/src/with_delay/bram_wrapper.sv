@@ -58,12 +58,17 @@ module bram_wrapper #(
 	logic last_read, last_write;
 
 	always_ff @(posedge clk) begin
-		ready_read <= ready_write;
-		last_read <= last_write;
+		if (reset) begin
+			ready_read <= 1'b0;
+			last_read <= 1'b0;
+		end else begin
+			ready_read <= real_valid && ~(|wstrobe);
+			last_read <= real_valid && ~(|wstrobe) && (~is_incr || burst_counter == len);
+		end
 	end
 
-	assign ready_write = real_valid;
-	assign last_write = ~is_incr ? real_valid : real_valid && burst_counter == len;
+	assign ready_write = real_valid && |wstrobe;
+	assign last_write = ready_write && (~is_incr || burst_counter == len);
 	
 	assign ready = |wstrobe ? ready_write : ready_read;
 	assign last = |wstrobe ? last_write : last_read;
