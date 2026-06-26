@@ -357,11 +357,12 @@ module SimMemoryWithVirtio
                 3'h0: uart_reg_read_byte = dlab ? uart_dll :
                     (uart_rx_valid ? uart_rx_fifo[uart_rx_head] : 8'd0);
                 3'h1: uart_reg_read_byte = dlab ? uart_dlm : uart_ier;
-                3'h2: uart_reg_read_byte = (uart_lsr_line_error && uart_ier[2]) ? 8'h06 :
+                3'h2: uart_reg_read_byte = (uart_fcr[0] ? 8'hc0 : 8'h00) |
+                    ((uart_lsr_line_error && uart_ier[2]) ? 8'h06 :
                     (uart_rx_irq_active ? 8'h04 :
                     (uart_rx_timeout_irq_active ? 8'h0c :
                     (uart_thr_irq_pending ? 8'h02 :
-                    (uart_iir_reports_modem ? 8'h00 : 8'h01))));
+                    (uart_iir_reports_modem ? 8'h00 : 8'h01)))));
                 3'h3: uart_reg_read_byte = uart_lcr;
                 3'h4: uart_reg_read_byte = uart_mcr;
                 3'h5: uart_reg_read_byte = {
