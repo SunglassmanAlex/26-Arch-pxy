@@ -30,6 +30,9 @@ module core import common::*;(
 	localparam word_t MSTATUS_MPP_MASK = 64'h0000_0000_0000_1800;
 	localparam word_t MSTATUS_XS_MASK  = 64'h0000_0000_0001_8000;
 	localparam word_t MSTATUS_MPRV_BIT = 64'h0000_0000_0002_0000;
+	localparam word_t MSTATUS_TVM_BIT  = 64'h0000_0000_0010_0000;
+	localparam word_t MSTATUS_TW_BIT   = 64'h0000_0000_0020_0000;
+	localparam word_t MSTATUS_TSR_BIT  = 64'h0000_0000_0040_0000;
 	localparam word_t MIP_SSIP_BIT     = 64'h0000_0000_0000_0002;
 	localparam word_t MIP_MSIP_BIT     = 64'h0000_0000_0000_0008;
 	localparam word_t MIP_STIP_BIT     = 64'h0000_0000_0000_0020;
@@ -739,6 +742,7 @@ module core import common::*;(
 	word_t id_csr_rdata, id_csr_src, id_csr_wdata;
 	logic id_csr_wen;
 	logic id_csr_legal, id_instr_legal;
+	logic id_csr_blocked_by_tvm, id_sret_legal, id_wfi_legal;
 	logic id_is_lr, id_is_sc, id_sc_success;
 	logic [4:0] id_amo_op;
 	logic id_control_misaligned, id_load_misaligned, id_store_misaligned;
@@ -1241,7 +1245,8 @@ module core import common::*;(
 	assign id_is_sc = id_is_amo && (id_amo_op == AMO_SC);
 	assign id_is_sfence_vma =
 		((if_id_instr & 32'hfe00_7fff) == 32'h1200_0073) &&
-		(current_priv != PRIV_U);
+		(current_priv != PRIV_U) &&
+		!((current_priv == PRIV_S) && |(csr_mstatus & MSTATUS_TVM_BIT));
 	always_comb begin
 		id_csr_wdata = id_csr_rdata;
 		id_csr_wen = 1'b0;
@@ -1263,16 +1268,27 @@ module core import common::*;(
 		endcase
 	end
 
+	assign id_csr_blocked_by_tvm =
+		(current_priv == PRIV_S) &&
+		|(csr_mstatus & MSTATUS_TVM_BIT) &&
+		(id_csr_addr == CSR_SATP);
+	assign id_sret_legal =
+		id_is_sret && (current_priv != PRIV_U) &&
+		!((current_priv == PRIV_S) && |(csr_mstatus & MSTATUS_TSR_BIT));
+	assign id_wfi_legal =
+		id_is_wfi && (current_priv != PRIV_U) &&
+		!((current_priv == PRIV_S) && |(csr_mstatus & MSTATUS_TW_BIT));
 	assign id_csr_legal = id_is_csr && csr_supported(id_csr_addr) &&
 		(current_priv >= id_csr_addr[9:8]) &&
 		!((id_csr_addr[11:10] == 2'b11) && id_csr_wen) &&
+		!id_csr_blocked_by_tvm &&
 		counter_csr_access_allowed(id_csr_addr, current_priv);
-		assign id_instr_legal =
-			(id_wen && !id_is_csr) || id_is_store || id_is_branch ||
-			id_is_fence || id_is_ecall || id_is_ebreak ||
-			(id_is_sret && current_priv != PRIV_U) || (id_is_mret && current_priv == PRIV_M) ||
-			(id_is_wfi && current_priv != PRIV_U) || id_is_sfence_vma ||
-			id_csr_legal || (if_id_instr == 32'h0005_006b);
+	assign id_instr_legal =
+		(id_wen && !id_is_csr) || id_is_store || id_is_branch ||
+		id_is_fence || id_is_ecall || id_is_ebreak ||
+		id_sret_legal || (id_is_mret && current_priv == PRIV_M) ||
+		id_wfi_legal || id_is_sfence_vma ||
+		id_csr_legal || (if_id_instr == 32'h0005_006b);
 
 	always_comb begin
 		unique case (id_branch_op)

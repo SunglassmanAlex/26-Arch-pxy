@@ -22,6 +22,7 @@
 - 新增 `EBREAK` 断点异常支持：SYSTEM/funct12=`0x001` 触发同步异常 cause 3。
 - 新增 `FENCE/FENCE.I` 合法 no-op 支持，提升编译器生成程序的兼容性。
 - 新增 `WFI` 合法 no-op 支持，覆盖 S 态内核空闲等待指令的仿真兼容。
+- 新增 `mstatus.TSR/TW/TVM` 限制检查：S 态在对应位打开时执行 `SRET/WFI/SFENCE.VMA` 或访问 `satp` 会按 illegal instruction trap 处理。
 - 新增标准 counter CSR 兼容：支持 `cycle/time/instret` U/S/M 只读 CSR、M 态 `mcycle/minstret` 读写、`mcounteren/scounteren` 的 CY/TM/IR 访问门控，以及 `mcountinhibit.CY/IR` 对 `mcycle/minstret` 的计数暂停；当前 `time` 在仿真中映射到 core cycle 作为单调时钟源。
 - 新增机器 ID/ISA CSR 兼容：支持 `misa` 读取 RV64 I/M/A/S/U 位并忽略写入，支持 `mvendorid/marchid/mimpid/mhartid` 只读访问，当前单核仿真 ID 均返回 0，并覆盖写只读 CSR 的 illegal trap。
 - 新增 environment/config CSR 探测兼容：支持 `mconfigptr` 只读返回 0，支持 `menvcfg/senvcfg` 作为 WARL zero CSR，避免标准启动代码探测这些 CSR 时直接 illegal。
@@ -53,14 +54,15 @@
 - 新增 timervec SSIP handoff 定向测试，覆盖 M timer handler 写 `sip.SSIP` 后返回 S 态并进入 S software interrupt 的 xv6 常见交接路径。
 - 新增 SFENCE.VMA 定向测试，覆盖 M 态合法执行 flush 和 U 态非法指令 trap。
 - 新增 WFI 定向测试，覆盖 S 态合法 no-op 后继续执行并进入 S 态 ecall trap，以及 U 态 WFI illegal trap。
+- 新增 mstatus TSR/TW/TVM 定向测试，覆盖 S 态被限制的 `satp`、`SFENCE.VMA`、`WFI` 和 `SRET` 都进入 illegal instruction trap。
 - 新增 CSR counter 定向测试，覆盖 M/U 态读取 `cycle/time/instret`、M 态写 `mcounteren/scounteren` 使能，以及 U 态写只读 `cycle` 的 illegal trap。
 - 新增 CSR mcountinhibit 定向测试，覆盖 `mcountinhibit.CY/IR` 写入、读取、暂停 `mcycle/minstret` 和清零后恢复计数。
 - 新增 CSR machine-id 定向测试，覆盖 `misa` 读取/写忽略、`mvendorid/marchid/mimpid/mhartid` 读取和写只读机器 ID CSR 的 illegal trap。
 - 新增 CSR envcfg 定向测试，覆盖 `mconfigptr/menvcfg/senvcfg` M 态探测、WARL zero 写忽略，以及 S 态访问 `senvcfg`。
 - 新增 AMO.D 定向测试，覆盖 `AMOSWAP.D/AMOADD.D/LR.D/SC.D` 成功路径和无 reservation 的 `SC.D` 失败路径。
-- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
-本次新增通过的核心测试为 atomic extension、AMO.D 定向测试、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、S 态软件中断定向测试、S 态外部中断定向测试、M timer from S-mode 定向测试、timervec SSIP handoff 定向测试、SFENCE.VMA 定向测试、WFI 定向测试、CSR counter 定向测试、CSR mcountinhibit 定向测试、CSR machine-id 定向测试、CSR envcfg 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 UART 两行前缀 trace。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
+本次新增通过的核心测试为 atomic extension、AMO.D 定向测试、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、S 态软件中断定向测试、S 态外部中断定向测试、M timer from S-mode 定向测试、timervec SSIP handoff 定向测试、SFENCE.VMA 定向测试、WFI 定向测试、mstatus TSR/TW/TVM 定向测试、CSR counter 定向测试、CSR mcountinhibit 定向测试、CSR machine-id 定向测试、CSR envcfg 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 UART 两行前缀 trace。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
 ## 3. Atomic Extension 设计
 
@@ -395,6 +397,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
   - 新增委托后的 `SSIP/STIP/SEIP` pending 镜像，支持 `swint/trint/exint` 进入 S trap。
   - 新增 instruction/load/store page fault 接入和数据访存 fault 后的 WB trap 清流水。
   - 新增 `WFI` 解码，S/M 态作为合法 no-op，U 态仍按非法指令处理。
+  - 新增 `mstatus.TSR/TW/TVM` 执行限制：S 态 `SRET`、`WFI`、`SFENCE.VMA` 和 `satp` CSR 访问在对应限制位打开时触发 illegal instruction trap。
   - 输出当前 `mstatus` 给 MMU 使用。
 - `vsrc/SimTop.sv`
   - 仿真顶层改为实例化 `SimMemoryWithVirtio`，在原 RAM/CLINT 行为前增加 virtio/simple-block MMIO 拦截。
@@ -446,6 +449,8 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
   - 新增独立 core 级 Verilator testbench，验证 M 态 `SFENCE.VMA` 合法并触发 `if_flush`，以及 U 态 `SFENCE.VMA` 触发 illegal instruction trap。
 - `vsrc/test/wfi_tb.sv`
   - 新增独立 core 级 Verilator testbench，验证 S 态 `WFI` 不触发 illegal trap，后续 `ecall` 能以 S-mode ecall cause 9 进入 M trap；随后再降到 U 态，验证 U 态 `WFI` 触发 illegal instruction trap。
+- `vsrc/test/mstatus_restrict_tb.sv`
+  - 新增独立 core 级 Verilator testbench，分别设置 `mstatus.TVM/TW/TSR` 后从 M 态 `mret` 到 S 态，验证受限 `satp` 访问、`SFENCE.VMA`、`WFI` 和 `SRET` 均以 `mcause=2` 进入 M trap。
 - `vsrc/test/csr_counter_tb.sv`
   - 新增独立 core 级 Verilator testbench，验证 M/U 态可读 `cycle/time/instret`、M 态可写 `mcounteren/scounteren`，并验证 U 态写只读 `cycle` 产生 illegal instruction trap。
 - `vsrc/test/csr_machine_id_tb.sv`
@@ -491,7 +496,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
 - `docs/nexys4_bringup.md`
   - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -781,7 +786,27 @@ WFI directed test passed.
 
 该测试直接实例化 `core`，M 态设置 `mtvec=0x100`、`mepc=0x40`、`mstatus.MPP=S` 后执行 `mret` 进入 S 态。S 态指令流执行 `WFI; addi; ecall`，先确认 trap 回 M 态时 `mcause=9` 且 `mepc=0x48`，说明 `WFI` 没有被错误识别为 illegal，也没有阻塞后续指令提交。随后 trap handler 设置 `mepc=0x80`、清 `mstatus.MPP` 并 `mret` 到 U 态，再执行 `WFI`，确认 `mcause=2` 且 `mepc=0x80`。
 
-### 7.11.1 CSR counter 定向测试
+### 7.11.1 mstatus TSR/TW/TVM 定向测试
+
+运行：
+
+```bash
+make test-labplus-mstatus-restrict
+```
+
+关键输出：
+
+```text
+mstatus_tvm_blocks_satp [OK]
+mstatus_tvm_blocks_sfence [OK]
+mstatus_tw_blocks_wfi [OK]
+mstatus_tsr_blocks_sret [OK]
+mstatus restrict directed test passed.
+```
+
+该测试直接实例化 `core`，每个子项都从 reset 后的 M 态开始，设置 `mtvec=0x100`、`mepc=0x40` 和 `mstatus.MPP=S`，再附加打开 `TVM/TW/TSR` 中对应限制位并执行 `mret` 进入 S 态。测试分别验证 `TVM=1` 时 S 态访问 `satp` 和执行 `SFENCE.VMA` 会以 illegal instruction 进入 M trap，`TW=1` 时 S 态 `WFI` 进入 M trap，`TSR=1` 时 S 态 `SRET` 进入 M trap；四个场景均检查 `mcause=2`、`mepc=0x40`，并确认受限指令后的普通指令未提交。
+
+### 7.11.2 CSR counter 定向测试
 
 运行：
 
@@ -801,7 +826,7 @@ CSR counter directed test passed.
 
 该测试直接实例化 `core`，先在 M 态依次执行 `csrr cycle/time/instret`，确认 counter CSR 已经随执行推进；随后写 `mcounteren/scounteren=0x7`，打开 CY/TM/IR 三类 counter 对低特权级的访问，再通过 `mret` 降到 U 态读取 `cycle/time/instret`，确认这些标准 counter CSR 对 U 态只读可见。最后在 U 态执行 `csrw cycle, x0`，确认只读 CSR 写入会触发 illegal instruction trap，`mcause=2` 且 `mepc` 指向该写 CSR 指令。当前实现将 `time` 映射到 `mcycle`，用于在没有独立 RTC CSR 源的仿真中提供单调时钟读数。
 
-### 7.11.2 CSR mcountinhibit 定向测试
+### 7.11.3 CSR mcountinhibit 定向测试
 
 运行：
 
@@ -821,7 +846,7 @@ CSR mcountinhibit directed test passed.
 
 该测试直接实例化 `core`，在 M 态写入 `mcountinhibit=0x5`，即设置 `CY/IR` 两个位，随后读取 `mcountinhibit` 确认 WARL mask 只保留当前实现支持的位。测试在 inhibit 生效期间连续执行普通指令并读取 `mcycle/minstret`，确认两者保持不变；随后写 0 清除 inhibit，再次执行普通指令并读取 counter，确认 `mcycle/minstret` 恢复递增。该 CSR 对系统软件的意义是允许启动代码或 benchmark 显式暂停机器级计数器，而默认 reset 值仍为 0，不改变已有 Lab 和 xv6 smoke 行为。
 
-### 7.11.3 CSR machine-id 定向测试
+### 7.11.4 CSR machine-id 定向测试
 
 运行：
 
@@ -840,7 +865,7 @@ CSR machine-id directed test passed.
 
 该测试直接实例化 `core`，在 M 态读取 `misa/mvendorid/marchid/mimpid/mhartid`，确认 `misa` 报告 RV64 I/M/A/S/U，当前单核仿真下 ID CSR 均合法返回 0；随后写 `misa` 并再次读取，确认该 WARL CSR 的写入被忽略且不触发 trap。最后写 `mvendorid`，确认 `[11:10]=2'b11` 的只读 CSR 写入会触发 illegal instruction trap，`mcause=2` 且 `mepc` 指向写 CSR 指令。
 
-### 7.11.4 CSR envcfg 定向测试
+### 7.11.5 CSR envcfg 定向测试
 
 运行：
 
@@ -1390,7 +1415,7 @@ Running AES correctness checks...
 make test-labplus-preboard
 ```
 
-该入口顺序运行 `test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-counters`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio` 和 `test-labplus-xv6smoke`。本次回归全部通过，关键收尾输出包括：
+该入口顺序运行 `test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio` 和 `test-labplus-xv6smoke`。本次回归全部通过，关键收尾输出包括：
 
 ```text
 Vivado pre-board check passed.
@@ -1404,7 +1429,9 @@ M-mode timer from S-mode directed test passed.
 Timervec SSIP directed test passed.
 SFENCE.VMA directed test passed.
 WFI directed test passed.
+mstatus restrict directed test passed.
 CSR counter directed test passed.
+CSR mcountinhibit directed test passed.
 CSR machine-id directed test passed.
 CSR envcfg directed test passed.
 AMO.D directed test passed.
@@ -1415,7 +1442,7 @@ simple virtio block MMIO test passed.
 xv6 platform smoke test passed.
 ```
 
-这个集合不替代 Vivado 综合/实现和真实上板串口输出，但可以在没有板子的情况下快速确认 xv6/pre-board 相关的 Vivado 工程配置、已有 bitstream/report 健康状态、CPU 特权、counter/机器 ID/ISA/envcfg CSR、MMU fault、S/M 态中断和 timervec SSIP 交接、SFENCE/WFI、CLINT/PLIC/UART/virtio 仿真模型没有被后续改动破坏。
+这个集合不替代 Vivado 综合/实现和真实上板串口输出，但可以在没有板子的情况下快速确认 xv6/pre-board 相关的 Vivado 工程配置、已有 bitstream/report 健康状态、CPU 特权、counter/mcountinhibit/机器 ID/ISA/envcfg CSR、MMU fault、S/M 态中断和 timervec SSIP 交接、SFENCE/WFI/mstatus TSR/TW/TVM 限制、CLINT/PLIC/UART/virtio 仿真模型没有被后续改动破坏。
 
 ### 7.21 Nexys4 DDR 上板清单
 
