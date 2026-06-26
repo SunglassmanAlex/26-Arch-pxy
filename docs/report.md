@@ -1183,6 +1183,10 @@ timing status: constraints not met, usable for bring-up observation but should b
 
 该清单同时记录了当前 Vivado 工程仍使用 `basys3_top` 作为兼容 wrapper、实际实例化 `nexys4_top`，Nexys4 DDR 的 `clk/btnC/sw[3:0]/led[3:0]/RsTx/RsRx` 管脚约束，以及 `device.sv` 的板级串口参数。由于板级 UART 的 `BIT_TMR_MAX=10416` 且输入时钟为 100 MHz，实体板串口应设置为 `9600 8N1`。本地环境没有 `vivado` 或 `bootgen` 命令，因此当前不能重新生成 bitstream 或 flash `.bin/.mcs`；实际可烧写产物是已有 `.bit`。
 
+重新烧写包含 BRAM read response 修复的 bitstream 后，Nexys4 DDR 通过 USB UART 输出了 AES benchmark 和 correctness 的前几行，说明实体板已经越过此前停在第二行 `R` 的位置：
+
+![Nexys4 DDR UART AES benchmark output](nexys4_aes_uart_output.png)
+
 为了解决当前 `.bit` 旧于部分 RTL/工程文件的问题，新增 `make vivado-nexys4-bitstream`。在安装 Vivado 的机器上运行该目标会调用 `tools/rebuild_nexys4_bitstream.tcl` 重新执行 `synth_1` 和 `impl_1 -to_step write_bitstream`。生成新 `.bit` 后，应再次运行 `make test-labplus-vivado-precheck`，确认 stale warning 消失或只剩预期的本地时间戳提示。
 
 拿到实体板后，新增 `make vivado-nexys4-program` 可直接通过 Vivado Hardware Manager batch 模式烧写当前 `.bit`。如果要指定非默认 bitstream 或硬件目标，可设置 `BITSTREAM=/path/to/file.bit` 或 `HW_TARGET='*/xilinx_tcf/Digilent/*'`。
