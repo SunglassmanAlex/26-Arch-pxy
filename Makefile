@@ -17,6 +17,7 @@ no_arguments:
 	@echo "  - test-labplus-sinterrupt: Run Lab+ directed S-mode interrupt test"
 	@echo "  - test-labplus-sfence: Run Lab+ directed SFENCE.VMA test"
 	@echo "  - test-labplus-wfi: Run Lab+ directed WFI test"
+	@echo "  - test-labplus-counters: Run Lab+ directed CSR counter test"
 	@echo "  - test-labplus-clint: Run Lab+ directed CLINT alias test"
 	@echo "  - test-labplus-plic: Run Lab+ directed PLIC MMIO test"
 	@echo "  - test-labplus-uart: Run Lab+ directed UART MMIO test"
@@ -126,6 +127,14 @@ test-labplus-wfi:
 	  vsrc/test/difftest_stubs.sv vsrc/test/wfi_tb.sv
 	./build/wfi/wfi_tb
 
+test-labplus-counters:
+	rm -rf build/csr-counter
+	verilator --binary --timing --top-module csr_counter_tb \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/csr-counter -o csr_counter_tb \
+	  vsrc/test/difftest_stubs.sv vsrc/test/csr_counter_tb.sv
+	./build/csr-counter/csr_counter_tb
+
 test-labplus-clint:
 	rm -rf build/clint-alias
 	verilator --binary --timing --top-module clint_alias_tb \
@@ -217,6 +226,7 @@ test-labplus-preboard:
 	$(MAKE) test-labplus-sinterrupt
 	$(MAKE) test-labplus-sfence
 	$(MAKE) test-labplus-wfi
+	$(MAKE) test-labplus-counters
 	$(MAKE) test-labplus-clint
 	$(MAKE) test-labplus-plic
 	$(MAKE) test-labplus-uart
@@ -251,4 +261,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check

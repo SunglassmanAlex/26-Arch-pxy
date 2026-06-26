@@ -86,7 +86,7 @@ module core import common::*;(
 	addr_t reservation_addr;
 
 	word_t csr_mstatus, csr_mtvec, csr_mip, csr_mie, csr_mscratch;
-	word_t csr_mcause, csr_mtval, csr_mepc, csr_mcycle, csr_satp;
+	word_t csr_mcause, csr_mtval, csr_mepc, csr_mcycle, csr_minstret, csr_satp;
 	word_t csr_stvec, csr_sscratch, csr_sepc, csr_scause, csr_stval;
 	word_t csr_medeleg, csr_mideleg, csr_pmpcfg0;
 	word_t csr_pmpaddr[PMP_ENTRIES];
@@ -485,7 +485,11 @@ module core import common::*;(
 			CSR_MTVAL:    csr_read = csr_mtval;
 			CSR_STVAL:    csr_read = csr_stval;
 			CSR_SATP:     csr_read = csr_satp;
+			CSR_CYCLE,
+			CSR_TIME,
 			CSR_MCYCLE:   csr_read = csr_mcycle;
+			CSR_INSTRET,
+			CSR_MINSTRET: csr_read = csr_minstret;
 			CSR_MHARTID:  csr_read = csr_mhartid;
 			CSR_MEDELEG:  csr_read = csr_medeleg;
 			CSR_MIDELEG:  csr_read = csr_mideleg;
@@ -508,7 +512,8 @@ module core import common::*;(
 			CSR_MIP, CSR_SIP, CSR_MIE, CSR_SIE,
 			CSR_MSCRATCH, CSR_SSCRATCH, CSR_MEPC, CSR_SEPC,
 			CSR_MCAUSE, CSR_SCAUSE, CSR_MTVAL, CSR_STVAL,
-			CSR_SATP, CSR_MCYCLE, CSR_MHARTID,
+			CSR_SATP, CSR_CYCLE, CSR_TIME, CSR_INSTRET,
+			CSR_MCYCLE, CSR_MINSTRET, CSR_MHARTID,
 			CSR_MEDELEG, CSR_MIDELEG, CSR_PMPADDR0, CSR_PMPADDR1,
 			CSR_PMPADDR2, CSR_PMPADDR3, CSR_PMPADDR4, CSR_PMPADDR5,
 			CSR_PMPADDR6, CSR_PMPADDR7, CSR_PMPCFG0:
@@ -1651,6 +1656,7 @@ module core import common::*;(
 			csr_mtval <= '0;
 			csr_mepc <= '0;
 			csr_mcycle <= '0;
+			csr_minstret <= '0;
 			csr_satp <= '0;
 			csr_stvec <= '0;
 			csr_sscratch <= '0;
@@ -1668,6 +1674,7 @@ module core import common::*;(
 		end
 		else begin
 			csr_mcycle <= csr_mcycle + 64'd1;
+			csr_minstret <= csr_minstret + ((wb_valid && !wb_trap_valid) ? 64'd1 : 64'd0);
 			csr_mhartid <= '0;
 			if (wb_trap_valid) begin
 				if (wb_trap_to_s) begin
@@ -1714,6 +1721,7 @@ module core import common::*;(
 					CSR_STVAL:    csr_stval <= wb_csr_wdata;
 					CSR_SATP:     csr_satp <= wb_csr_wdata;
 					CSR_MCYCLE:   csr_mcycle <= wb_csr_wdata;
+					CSR_MINSTRET: csr_minstret <= wb_csr_wdata;
 					CSR_MEDELEG:  csr_medeleg <= wb_csr_wdata & MEDELEG_MASK;
 					CSR_MIDELEG:  csr_mideleg <= wb_csr_wdata & MIDELEG_MASK;
 					CSR_PMPADDR0: csr_pmpaddr[0] <= wb_csr_wdata;
