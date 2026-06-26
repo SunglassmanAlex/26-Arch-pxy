@@ -35,6 +35,7 @@ no_arguments:
 	@echo "  - test-labplus-virtio: Run Lab+ directed simple virtio block test"
 	@echo "  - test-labplus-xv6smoke: Run Lab+ xv6 platform MMIO smoke test"
 	@echo "  - test-labplus-xv6boot: Run xv6 kernel image with optional fs.img"
+	@echo "  - xv6-prepare-images: Convert/stage xv6 kernel ELF and fs.img"
 	@echo "  - test-labplus-vivado-precheck: Run Lab+ Vivado project static pre-board check"
 	@echo "  - test-labplus-board-device: Run Lab+ Nexys4 board device UART/LED test"
 	@echo "  - test-labplus-board-soc-trace: Run Nexys4 soc_top trace simulation"
@@ -72,6 +73,10 @@ export NEMU_HOME=$(abspath ./ready-to-run)
 XV6_KERNEL ?= ready-to-run/xv6/kernel.bin
 XV6_FS ?= ready-to-run/xv6/fs.img
 XV6_MAX_CYCLES ?= 5000000
+XV6_SRC ?=
+XV6_KERNEL_ELF ?=
+XV6_FS_IMG ?=
+XV6_OBJCOPY ?=
 
 sim:
 	rm -rf build
@@ -317,6 +322,13 @@ test-labplus-xv6boot:
 	fi
 	TEST=xv6 ./build/emu --no-diff -i "$(XV6_KERNEL)" -C $(XV6_MAX_CYCLES) $(VOPT)
 
+xv6-prepare-images:
+	python3 tools/prepare_xv6_images.py \
+	  $(if $(XV6_SRC),--xv6-src $(XV6_SRC)) \
+	  $(if $(XV6_KERNEL_ELF),--kernel-elf $(XV6_KERNEL_ELF)) \
+	  $(if $(XV6_FS_IMG),--fs-img $(XV6_FS_IMG)) \
+	  $(if $(XV6_OBJCOPY),--objcopy $(XV6_OBJCOPY))
+
 test-labplus-vivado-precheck:
 	python3 tools/preboard_check.py
 
@@ -394,4 +406,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-xv6boot test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-mcountinhibit test-labplus-mstatus-restrict test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-sstc test-labplus-xv6start test-labplus-ssoftint test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-xv6boot xv6-prepare-images test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-mcountinhibit test-labplus-mstatus-restrict test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-sstc test-labplus-xv6start test-labplus-ssoftint test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check

@@ -37,6 +37,7 @@
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、IIR FIFO-enabled bits、LSR overrun/parity/framing/break、break-only line-status 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
 - 新增 xv6/QEMU platform smoke 集成测试：在同一个 `SimMemoryWithVirtio` 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、标准 virtqueue read/write/readback 后 claim virtio 中断、virtio/uart 多源优先级仲裁和 complete 清中断路径。
 - 新增 xv6 boot 运行入口：`make test-labplus-xv6boot` 支持通过 `XV6_KERNEL=/path/to/kernel.bin` 加载 raw kernel，并可通过 `XV6_FS=/path/to/fs.img` 把文件系统镜像注入 `build/xv6/fs.img` 作为 virtio block 初始磁盘。
+- 新增 xv6 镜像准备入口：`make xv6-prepare-images XV6_SRC=/path/to/xv6-riscv` 可调用 RISC-V `objcopy` 将 `kernel/kernel` 转为 `ready-to-run/xv6/kernel.bin`，并复制 `fs.img`，为后续 boot target 固定产物路径。
 - 新增 Sstc/`stimecmp` 兼容：支持 M 态设置 `menvcfg.STCE`，S 态访问 `stimecmp(0x14d)`，并在 `mcycle >= stimecmp` 时产生 delegated STIP，覆盖新版 xv6 `timerinit()` 的 supervisor timer setup 路径。
 - 新增 xv6 start CSR 序列定向测试：按 xv6 `start.c` 风格覆盖 `satp=0`、异常/中断委托、S 态中断使能、PMP 全内存、`menvcfg.STCE`、`mcounteren.TM`、`stimecmp` 和 `mret` 到 S-mode。
 - 新增 Vivado 上板前静态检查：解析 `project_1.xpr`、Nexys4 DDR XDC 和顶层 wrapper，确认 part、工程文件、约束端口管脚和 `basys3_top` 兼容包装没有跑偏；同时检查已有 bitstream、route status、routed DRC 和 timing summary，确认 route errors=0、DRC violations=0，并在 WNS 或 timing constraints 未收敛时给出 warning。
@@ -65,7 +66,7 @@
 - 新增 Sstc 定向测试，覆盖 `menvcfg.STCE`、S 态写 `stimecmp` 和 delegated supervisor timer interrupt。
 - 新增 xv6 start CSR 定向测试，覆盖新版 xv6 进入 S-mode 前的主要机器态 CSR 初始化序列。
 - 新增 AMO.D 定向测试，覆盖 `AMOSWAP.D/AMOADD.D/LR.D/SC.D` 成功路径和无 reservation 的 `SC.D` 失败路径。
-- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
 本次新增通过的核心测试为 atomic extension、AMO.D 定向测试、privileged/PMP sys-test、MMU page fault 定向测试、S 态中断定向测试、S 态软件中断定向测试、S 态外部中断定向测试、M timer from S-mode 定向测试、timervec SSIP handoff 定向测试、Sstc/stimecmp 定向测试、xv6 start CSR 定向测试、SFENCE.VMA 定向测试、WFI 定向测试、mstatus TSR/TW/TVM 定向测试、CSR counter 定向测试、CSR mcountinhibit 定向测试、CSR machine-id 定向测试、CSR envcfg 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 UART 两行前缀 trace。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
@@ -503,10 +504,12 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
   - 新增 Vivado Hardware Manager batch 烧写脚本，默认使用 `project_1.runs/impl_1/basys3_top.bit`，连接硬件服务器后打开目标，优先选择 `xc7a100t*` 设备并执行 `program_hw_devices`；支持 `BITSTREAM` 和 `HW_TARGET` 环境变量覆盖。
 - `tools/check_board_uart.py`
   - 新增实体板 UART 验收脚本，不依赖 pyserial，使用 POSIX `termios/select` 将串口配置为 `9600 8N1`，实时输出捕获到的字节并等待指定字符串；默认等待 `Hello World!`，支持 `--expect`、`--baud` 和 `--timeout`。
+- `tools/prepare_xv6_images.py`
+  - 新增 xv6 镜像准备脚本，支持 `--xv6-src` 自动使用 `kernel/kernel` 和 `fs.img`，或显式传入 `--kernel-elf/--fs-img`；调用 RISC-V `objcopy -O binary` 生成 `ready-to-run/xv6/kernel.bin`，并复制文件系统镜像到 `ready-to-run/xv6/fs.img`。
 - `docs/nexys4_bringup.md`
   - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`test-labplus-xv6boot` 检查 `XV6_KERNEL` raw binary，按需 stage `XV6_FS` 到 `build/xv6/fs.img` 并用 `--no-diff` 启动 emu；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`test-labplus-xv6boot` 检查 `XV6_KERNEL` raw binary，按需 stage `XV6_FS` 到 `build/xv6/fs.img` 并用 `--no-diff` 启动 emu；`xv6-prepare-images` 将已有 xv6 ELF/`fs.img` 转换并 stage 到默认 boot 路径；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -1339,6 +1342,18 @@ Optional disk image: XV6_FS=/path/to/fs.img
 
 这一步把完整 boot 的命令入口和 disk image 注入路径固定下来。后续只要补入真实 xv6 raw kernel 和 fs.img，就可以直接用 `--no-diff` 在当前 difftest memory bus 平台上观察内核启动串口输出。
 
+新增 `xv6-prepare-images` 用于准备上述默认路径：
+
+```bash
+make xv6-prepare-images XV6_SRC=/path/to/xv6-riscv
+```
+
+该目标会调用 `tools/prepare_xv6_images.py`，默认读取 `$(XV6_SRC)/kernel/kernel` 和 `$(XV6_SRC)/fs.img`，用 `riscv64-unknown-elf-objcopy` 或 `riscv64-linux-gnu-objcopy` 生成 `ready-to-run/xv6/kernel.bin`，并复制 `ready-to-run/xv6/fs.img`。也可以通过 `XV6_KERNEL_ELF=/path/to/kernel`、`XV6_FS_IMG=/path/to/fs.img` 和 `XV6_OBJCOPY=/path/to/objcopy` 显式指定输入。当前无输入时验证输出为：
+
+```text
+missing --kernel-elf or --xv6-src
+```
+
 ### 7.16.2 Sstc/stimecmp 定向测试
 
 运行：
@@ -1546,7 +1561,7 @@ timing status: constraints not met, usable for bring-up observation but should b
 
 本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、Sstc `menvcfg.STCE/stimecmp` 兼容、xv6 start CSR 序列、标准 counter CSR 与 `mcounteren/scounteren` 门控、机器 ID/ISA/envcfg CSR 兼容、AMO.D、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、mstatus TSR/TW/TVM 限制、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，以及 `test-labplus-xv6boot` raw kernel/fs.img 运行入口，并补了独立 page fault、S timer/software/external interrupt、M timer from S-mode、timervec SSIP handoff、Sstc/stimecmp、xv6 start CSR、SFENCE.VMA、WFI、mstatus restrict、CSR counter/mcountinhibit/machine-id/envcfg、AMO.D、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。后续如果继续推进 xv6，需要补充：
 
-- 准备真实 xv6 `kernel.bin` raw binary 和 `fs.img`，或在本机安装 RISC-V 交叉工具链后从 xv6 源码构建，然后运行 `make test-labplus-xv6boot XV6_KERNEL=... XV6_FS=...`。
+- 准备真实 xv6 源码和 RISC-V 交叉工具链，运行 `make xv6-prepare-images XV6_SRC=/path/to/xv6-riscv` 生成 `ready-to-run/xv6/kernel.bin/fs.img`，然后运行 `make test-labplus-xv6boot`。
 - 根据 xv6 真实启动串口日志继续补缺失的 CSR、PTE flag、trap corner case 或 virtio/PLIC/UART 行为。
 - 更高级的 virtio block queue 行为、packed queue、动态配置变更通知和更完整的 config 字段。
 - 更完整的 16550 baud timing 和 receiver line-break timing 等细节。
