@@ -15,6 +15,7 @@ no_arguments:
 	@echo "  - test-labplus-4: Run Lab+ PMP test"
 	@echo "  - test-labplus-pagefault: Run Lab+ directed MMU page-fault test"
 	@echo "  - test-labplus-sinterrupt: Run Lab+ directed S-mode interrupt test"
+	@echo "  - test-labplus-ssoftint: Run Lab+ directed S-mode software interrupt test"
 	@echo "  - test-labplus-sextint: Run Lab+ directed S-mode external interrupt test"
 	@echo "  - test-labplus-mtimer: Run Lab+ directed M timer from S-mode test"
 	@echo "  - test-labplus-timervec: Run Lab+ directed timervec SSIP handoff test"
@@ -116,6 +117,14 @@ test-labplus-sinterrupt:
 	  -Mdir build/s-interrupt -o s_interrupt_pending_tb \
 	  vsrc/test/difftest_stubs.sv vsrc/test/s_interrupt_pending_tb.sv
 	./build/s-interrupt/s_interrupt_pending_tb
+
+test-labplus-ssoftint:
+	rm -rf build/s-software-interrupt
+	verilator --binary --timing --top-module s_software_interrupt_tb \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/s-software-interrupt -o s_software_interrupt_tb \
+	  vsrc/test/difftest_stubs.sv vsrc/test/s_software_interrupt_tb.sv
+	./build/s-software-interrupt/s_software_interrupt_tb
 
 test-labplus-sextint:
 	rm -rf build/s-external-interrupt
@@ -278,6 +287,7 @@ test-labplus-preboard:
 	$(MAKE) test-labplus-board-soc-trace
 	$(MAKE) test-labplus-pagefault
 	$(MAKE) test-labplus-sinterrupt
+	$(MAKE) test-labplus-ssoftint
 	$(MAKE) test-labplus-sextint
 	$(MAKE) test-labplus-mtimer
 	$(MAKE) test-labplus-timervec
@@ -321,4 +331,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-ssoftint test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
