@@ -452,21 +452,46 @@ module core import common::*;(
 		endcase
 	endfunction
 
-	function automatic logic [7:0] amo_fuop(input logic [4:0] op);
+	function automatic word_t amo_d_result(input logic [4:0] op, input word_t oldd, input word_t srcd);
 		unique case (op)
-			5'b00010: amo_fuop = 8'o02; // LR.W
-			5'b00011: amo_fuop = 8'o06; // SC.W
-			5'b00001: amo_fuop = 8'o12; // AMOSWAP.W
-			5'b00000: amo_fuop = 8'o16; // AMOADD.W
-			5'b00100: amo_fuop = 8'o22; // AMOXOR.W
-			5'b01100: amo_fuop = 8'o26; // AMOAND.W
-			5'b01000: amo_fuop = 8'o32; // AMOOR.W
-			5'b10000: amo_fuop = 8'o36; // AMOMIN.W
-			5'b10100: amo_fuop = 8'o42; // AMOMAX.W
-			5'b11000: amo_fuop = 8'o46; // AMOMINU.W
-			5'b11100: amo_fuop = 8'o52; // AMOMAXU.W
-			default:  amo_fuop = 8'o00;
+			5'b00000: amo_d_result = oldd + srcd;                                  // AMOADD.D
+			5'b00001: amo_d_result = srcd;                                         // AMOSWAP.D
+			5'b00100: amo_d_result = oldd ^ srcd;                                  // AMOXOR.D
+			5'b01100: amo_d_result = oldd & srcd;                                  // AMOAND.D
+			5'b01000: amo_d_result = oldd | srcd;                                  // AMOOR.D
+			5'b10000: amo_d_result = ($signed(oldd) < $signed(srcd)) ? oldd : srcd; // AMOMIN.D
+			5'b10100: amo_d_result = ($signed(oldd) > $signed(srcd)) ? oldd : srcd; // AMOMAX.D
+			5'b11000: amo_d_result = (oldd < srcd) ? oldd : srcd;                  // AMOMINU.D
+			5'b11100: amo_d_result = (oldd > srcd) ? oldd : srcd;                  // AMOMAXU.D
+			default:  amo_d_result = srcd;
 		endcase
+	endfunction
+
+	function automatic addr_t amo_reservation_base(input addr_t addr, input msize_t size);
+		amo_reservation_base = (size == MSIZE8) ? {addr[63:3], 3'b000} : {addr[63:2], 2'b00};
+	endfunction
+
+	function automatic strobe_t amo_event_mask(input logic [7:0] optype, input logic [2:0] ofs);
+		amo_event_mask = (optype == 8'd3) ? 8'hff : make_store_mask(MSIZE4, ofs);
+	endfunction
+
+	function automatic logic [7:0] amo_fuop(input logic [4:0] op, input logic is_dword);
+		logic [7:0] base;
+		unique case (op)
+			5'b00010: base = 8'o02; // LR.W/D
+			5'b00011: base = 8'o06; // SC.W/D
+			5'b00001: base = 8'o12; // AMOSWAP.W/D
+			5'b00000: base = 8'o16; // AMOADD.W/D
+			5'b00100: base = 8'o22; // AMOXOR.W/D
+			5'b01100: base = 8'o26; // AMOAND.W/D
+			5'b01000: base = 8'o32; // AMOOR.W/D
+			5'b10000: base = 8'o36; // AMOMIN.W/D
+			5'b10100: base = 8'o42; // AMOMAX.W/D
+			5'b11000: base = 8'o46; // AMOMINU.W/D
+			5'b11100: base = 8'o52; // AMOMAXU.W/D
+			default:  base = 8'o00;
+		endcase
+		amo_fuop = base + (is_dword ? 8'd1 : 8'd0);
 	endfunction
 
 	function automatic word_t csr_read(input csr_addr_t id);
@@ -963,11 +988,11 @@ module core import common::*;(
 			end
 
 				7'b0101111: begin
-					if (fun3 == 3'b010) begin
+					if ((fun3 == 3'b010) || (fun3 == 3'b011)) begin
 						id_wen = 1'b1;
 					id_is_amo = 1'b1;
-					id_mem_size = MSIZE4;
-					id_load_optype = 8'd2;
+					id_mem_size = (fun3 == 3'b011) ? MSIZE8 : MSIZE4;
+					id_load_optype = (fun3 == 3'b011) ? 8'd3 : 8'd2;
 					unique case (if_id_instr[31:27])
 						AMO_ADD, AMO_SWAP, AMO_LR, AMO_SC,
 						AMO_XOR, AMO_OR, AMO_AND,
@@ -1265,7 +1290,8 @@ module core import common::*;(
 	assign id_jump_target = id_is_jalr ? {id_jalr_target_raw[63:1], 1'b0} : (if_id_pc + imm_j);
 	assign id_control_target = id_is_branch ? id_branch_target : id_jump_target;
 	assign id_mem_addr = id_is_amo ? rs1_val : (rs1_val + (id_is_store ? imm_s : imm_i));
-	assign id_sc_success = id_is_sc && reservation_valid && ({id_mem_addr[63:2], 2'b00} == reservation_addr);
+	assign id_sc_success = id_is_sc && reservation_valid &&
+		(amo_reservation_base(id_mem_addr, id_mem_size) == reservation_addr);
 	assign id_control_misaligned =
 		(id_is_jalr && |id_jalr_target_raw[1:0]) ||
 		(((id_is_jal || (id_is_branch && id_branch_taken))) && |id_control_target[1:0]);
@@ -1509,12 +1535,19 @@ module core import common::*;(
 				end
 				else if (mem_is_atomic && !mem_atomic_write_phase && !mem_atomic_is_lr) begin
 					logic [31:0] old_word, new_word;
+					word_t old_dword, new_dword;
 					old_word = select_word(dresp.data, mem_addr[2:0]);
+					old_dword = make_load_data(dresp.data, mem_addr[2:0], 8'd3);
 					new_word = amo_w_result(mem_amo_op, old_word, mem_wdata[31:0]);
-					mem_atomic_wb_data <= sext32(old_word);
+					new_dword = amo_d_result(mem_amo_op, old_dword, mem_wdata);
+					mem_atomic_wb_data <= (mem_size == MSIZE8) ? old_dword : sext32(old_word);
 					mem_atomic_write_phase <= 1'b1;
-					mem_strobe <= make_store_mask(MSIZE4, mem_addr[2:0]);
-					mem_wdata <= make_store_data(MSIZE4, mem_addr[2:0], {32'd0, new_word});
+					mem_strobe <= make_store_mask(mem_size, mem_addr[2:0]);
+					mem_wdata <= make_store_data(
+						mem_size,
+						mem_addr[2:0],
+						(mem_size == MSIZE8) ? new_dword : {32'd0, new_word}
+					);
 				end
 				else begin
 					mem_pending <= 1'b0;
@@ -1532,7 +1565,7 @@ module core import common::*;(
 					ex_wb_is_atomic <= mem_is_atomic;
 					ex_wb_rd <= mem_rd;
 					ex_wb_data <= mem_is_atomic ?
-						(mem_atomic_is_lr ? make_load_data(dresp.data, mem_addr[2:0], 8'd2) : mem_atomic_wb_data) :
+						(mem_atomic_is_lr ? make_load_data(dresp.data, mem_addr[2:0], mem_load_optype) : mem_atomic_wb_data) :
 						(mem_is_load ? make_load_data(dresp.data, mem_addr[2:0], mem_load_optype) : 64'd0);
 					ex_wb_pc <= mem_pc;
 					ex_wb_instr <= mem_instr;
@@ -1545,12 +1578,13 @@ module core import common::*;(
 					ex_wb_atomic_src_data <= mem_atomic_src_data;
 					if (mem_is_atomic && mem_atomic_is_lr) begin
 						reservation_valid <= 1'b1;
-						reservation_addr <= {mem_addr[63:2], 2'b00};
+						reservation_addr <= amo_reservation_base(mem_addr, mem_size);
 					end
 					else if (mem_is_atomic && mem_atomic_is_sc) begin
 						reservation_valid <= 1'b0;
 					end
-					else if (mem_is_store && reservation_valid && ({mem_addr[63:2], 2'b00} == reservation_addr)) begin
+					else if (mem_is_store && reservation_valid &&
+						(amo_reservation_base(mem_addr, mem_size) == reservation_addr)) begin
 						reservation_valid <= 1'b0;
 					end
 				end
@@ -1956,8 +1990,8 @@ module core import common::*;(
 		.atomicResp         (dt_valid && dt_is_atomic && !dt_skip),
 		.atomicAddr         (dt_mem_paddr),
 		.atomicData         (dt_atomic_src_data),
-		.atomicMask         (make_store_mask(MSIZE4, dt_mem_addr[2:0])),
-		.atomicFuop         (amo_fuop(dt_amo_op)),
+		.atomicMask         (amo_event_mask(dt_load_optype, dt_mem_addr[2:0])),
+		.atomicFuop         (amo_fuop(dt_amo_op, dt_load_optype == 8'd3)),
 		.atomicOut          (dt_wdata)
 	);
 

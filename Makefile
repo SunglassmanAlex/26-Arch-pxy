@@ -20,6 +20,7 @@ no_arguments:
 	@echo "  - test-labplus-wfi: Run Lab+ directed WFI test"
 	@echo "  - test-labplus-counters: Run Lab+ directed CSR counter test"
 	@echo "  - test-labplus-csr-id: Run Lab+ directed machine-id/ISA CSR test"
+	@echo "  - test-labplus-amo-d: Run Lab+ directed AMO.D test"
 	@echo "  - test-labplus-clint: Run Lab+ directed CLINT alias test"
 	@echo "  - test-labplus-plic: Run Lab+ directed PLIC MMIO test"
 	@echo "  - test-labplus-uart: Run Lab+ directed UART MMIO test"
@@ -153,6 +154,14 @@ test-labplus-csr-id:
 	  vsrc/test/difftest_stubs.sv vsrc/test/csr_machine_id_tb.sv
 	./build/csr-machine-id/csr_machine_id_tb
 
+test-labplus-amo-d:
+	rm -rf build/amo-d
+	verilator --binary --timing --top-module amo_d_tb \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/amo-d -o amo_d_tb \
+	  vsrc/test/difftest_stubs.sv vsrc/test/amo_d_tb.sv
+	./build/amo-d/amo_d_tb
+
 test-labplus-clint:
 	rm -rf build/clint-alias
 	verilator --binary --timing --top-module clint_alias_tb \
@@ -247,6 +256,7 @@ test-labplus-preboard:
 	$(MAKE) test-labplus-wfi
 	$(MAKE) test-labplus-counters
 	$(MAKE) test-labplus-csr-id
+	$(MAKE) test-labplus-amo-d
 	$(MAKE) test-labplus-clint
 	$(MAKE) test-labplus-plic
 	$(MAKE) test-labplus-uart
@@ -281,4 +291,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-csr-id test-labplus-mtimer vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-csr-id test-labplus-amo-d test-labplus-mtimer vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
