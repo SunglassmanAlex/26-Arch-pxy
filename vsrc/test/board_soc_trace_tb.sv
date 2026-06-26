@@ -25,12 +25,17 @@ module bram_0 (
 endmodule
 
 module board_soc_trace_tb;
-	localparam int UART_PREFIX_LEN = 28;
+	localparam int UART_PREFIX_LEN = 62;
 	localparam logic [UART_PREFIX_LEN-1:0][7:0] UART_PREFIX = {
 		8'h41, 8'h45, 8'h53, 8'h20, 8'h62, 8'h65, 8'h6e, 8'h63,
 		8'h68, 8'h6d, 8'h61, 8'h72, 8'h6b, 8'h20, 8'h2b, 8'h20,
 		8'h63, 8'h6f, 8'h72, 8'h72, 8'h65, 8'h63, 8'h74, 8'h6e,
-		8'h65, 8'h73, 8'h73, 8'h0a
+		8'h65, 8'h73, 8'h73, 8'h0a,
+		8'h52, 8'h75, 8'h6e, 8'h6e, 8'h69, 8'h6e, 8'h67, 8'h20,
+		8'h41, 8'h45, 8'h53, 8'h20, 8'h63, 8'h6f, 8'h72, 8'h72,
+		8'h65, 8'h63, 8'h74, 8'h6e, 8'h65, 8'h73, 8'h73, 8'h20,
+		8'h63, 8'h68, 8'h65, 8'h63, 8'h6b, 8'h73, 8'h2e, 8'h2e,
+		8'h2e, 8'h0a
 	};
 
 	logic clk;

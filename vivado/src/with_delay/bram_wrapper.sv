@@ -61,6 +61,9 @@ module bram_wrapper #(
 		if (reset) begin
 			ready_read <= 1'b0;
 			last_read <= 1'b0;
+		end else if (~valid || last_read) begin
+			ready_read <= 1'b0;
+			last_read <= 1'b0;
 		end else begin
 			ready_read <= real_valid && ~(|wstrobe);
 			last_read <= real_valid && ~(|wstrobe) && (~is_incr || burst_counter == len);

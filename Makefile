@@ -212,6 +212,7 @@ test-labplus-board-soc-trace:
 test-labplus-preboard:
 	$(MAKE) test-labplus-vivado-precheck
 	$(MAKE) test-labplus-board-device
+	$(MAKE) test-labplus-board-soc-trace
 	$(MAKE) test-labplus-pagefault
 	$(MAKE) test-labplus-sinterrupt
 	$(MAKE) test-labplus-sfence
