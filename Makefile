@@ -16,6 +16,7 @@ no_arguments:
 	@echo "  - test-labplus-pagefault: Run Lab+ directed MMU page-fault test"
 	@echo "  - test-labplus-sinterrupt: Run Lab+ directed S-mode interrupt test"
 	@echo "  - test-labplus-mtimer: Run Lab+ directed M timer from S-mode test"
+	@echo "  - test-labplus-timervec: Run Lab+ directed timervec SSIP handoff test"
 	@echo "  - test-labplus-sfence: Run Lab+ directed SFENCE.VMA test"
 	@echo "  - test-labplus-wfi: Run Lab+ directed WFI test"
 	@echo "  - test-labplus-counters: Run Lab+ directed CSR counter test"
@@ -122,6 +123,14 @@ test-labplus-mtimer:
 	  -Mdir build/m-timer-from-s -o m_timer_from_s_tb \
 	  vsrc/test/difftest_stubs.sv vsrc/test/m_timer_from_s_tb.sv
 	./build/m-timer-from-s/m_timer_from_s_tb
+
+test-labplus-timervec:
+	rm -rf build/timervec-ssip
+	verilator --binary --timing --top-module timervec_ssip_tb \
+	  +define+VERILATOR=1 -I$(NOOP_HOME)/vsrc \
+	  -Mdir build/timervec-ssip -o timervec_ssip_tb \
+	  vsrc/test/difftest_stubs.sv vsrc/test/timervec_ssip_tb.sv
+	./build/timervec-ssip/timervec_ssip_tb
 
 test-labplus-sfence:
 	rm -rf build/sfence-vma
@@ -261,6 +270,7 @@ test-labplus-preboard:
 	$(MAKE) test-labplus-pagefault
 	$(MAKE) test-labplus-sinterrupt
 	$(MAKE) test-labplus-mtimer
+	$(MAKE) test-labplus-timervec
 	$(MAKE) test-labplus-sfence
 	$(MAKE) test-labplus-wfi
 	$(MAKE) test-labplus-counters
@@ -301,4 +311,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
