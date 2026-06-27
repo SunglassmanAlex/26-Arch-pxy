@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,15 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+TIMER_RE = re.compile(r"now = [0-9]+s\s*")
+
+
+def normalize_output(output: str) -> str:
+    """Remove emulator status noise that can interleave with UART bytes."""
+    output = ANSI_RE.sub("", output)
+    output = TIMER_RE.sub("", output)
+    return output.replace("\r", "")
 
 
 def parse_args() -> argparse.Namespace:
@@ -113,7 +123,7 @@ def main() -> int:
         print(f"xv6 boot command failed with exit code {rc}; log: {log_path}", file=sys.stderr)
         return rc
 
-    output = log_path.read_text(encoding="utf-8", errors="replace")
+    output = normalize_output(log_path.read_text(encoding="utf-8", errors="replace"))
     if args.expect not in output:
         print(f"xv6 boot marker not found: {args.expect!r}; log: {log_path}", file=sys.stderr)
         return 1

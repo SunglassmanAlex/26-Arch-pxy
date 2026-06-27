@@ -40,7 +40,7 @@
 - 新增 xv6 boot 运行入口：`make test-labplus-xv6boot` 支持通过 `XV6_KERNEL=/path/to/kernel.bin` 加载 raw kernel，并可通过 `XV6_FS=/path/to/fs.img` 把文件系统镜像注入 `build/xv6/fs.img` 作为 virtio block 初始磁盘。
 - 新增 xv6 boot 检查入口：`make test-labplus-xv6boot-check` 会运行 boot target、保存 `build/xv6/boot.log`，并默认检查串口输出是否包含 `init: starting sh`，用于后续真实 xv6 镜像到位后自动判断是否已经 boot 到 shell。
 - 新增 xv6 镜像准备入口：`make xv6-prepare-images XV6_SRC=/path/to/xv6-riscv` 可调用 RISC-V `objcopy` 将 `kernel/kernel` 转为 `ready-to-run/xv6/kernel.bin`，并复制 `fs.img`，为后续 boot target 固定产物路径。
-- 新增可直接复测的 no-RVC xv6 boot smoke 镜像：使用 `rv64ima_zicsr_zifencei/lp64` 构建并放入 `ready-to-run/xv6/`，当前 `make test-labplus-xv6boot-check XV6_MAX_CYCLES=220000000` 已检测到 `init: starting sh`，说明 xv6 已启动到 shell banner。
+- 新增可直接复测的 no-RVC xv6 boot smoke 镜像：使用 `rv64ima_zicsr_zifencei/lp64` 构建并放入 `ready-to-run/xv6/`，当前 420M cycle 长跑已观察到 `init: starting sh`，说明 xv6 已启动到 shell banner。
 - 修复 virtio block 标准 virtqueue 的多扇区 data descriptor：xv6 的文件系统 block 为 1024B，旧模型只搬运首个 512B sector，导致 `/init` 后半段被读成 0；当前按 `desc1_len` 的 512B 整数倍循环搬运并返回正确 `used_len`。
 - 恢复 xv6 virtio disk 的中断驱动 sleep/wakeup 路径：boot 日志中可以看到 `devintr irq=1`，说明 virtio source 1 经 PLIC 进入 S external interrupt，`fsinit` 不再依赖 polling。
 - 恢复 xv6 UART TX 的中断驱动 sleep/wakeup 路径：boot 日志中可以看到 `devintr irq=10`，说明 16550 THRE interrupt 经 PLIC source 10 正常唤醒 `uartwrite`。
@@ -1349,7 +1349,7 @@ make test-labplus-xv6boot XV6_KERNEL=/path/to/kernel.bin XV6_FS=/path/to/fs.img
 
 `XV6_KERNEL` 要求是链接到 `0x80000000` 后转换出的 raw binary；如果手上是 xv6 的 ELF `kernel/kernel`，需要先用 RISC-V `objcopy -O binary` 转成 flat binary。`XV6_FS` 是可选文件系统镜像，目标会在运行前复制到 `build/xv6/fs.img`，`SimMemoryWithVirtio` reset 时会自动把它作为 simple/virtio block 的初始磁盘内容；如果没有提供，则仍使用默认 `SBLK` pattern，便于先观察内核早期串口输出。
 
-本次已经补入默认 smoke 镜像：`ready-to-run/xv6/kernel.bin` 和 `ready-to-run/xv6/fs.img`。由于当前 CPU 没有启用 RVC，MIT xv6 默认的 `rv64gc` 镜像会在压缩指令处失败；本次使用 `rv64ima_zicsr_zifencei/lp64` 重新构建。为了让 RTL 仿真在可接受时间内跑到 shell banner，smoke 镜像还做了以下测试向配置：`PHYSTOP=16MiB`、关闭 allocator poison fill。virtio disk 和 UART TX 已经从 polling workaround 恢复为 xv6 原本的 sleep/wakeup 路径，完成事件分别通过 PLIC source 1 和 source 10 外部中断唤醒。
+本次已经补入默认 smoke 镜像：`ready-to-run/xv6/kernel.bin` 和 `ready-to-run/xv6/fs.img`。由于当前 CPU 没有启用 RVC，MIT xv6 默认的 `rv64gc` 镜像会在压缩指令处失败；本次使用 `rv64ima_zicsr_zifencei/lp64` 重新构建。为了让 RTL 仿真在可接受时间内跑到 shell banner，smoke 镜像目前只将 `PHYSTOP` 降到 16MiB；allocator poison fill、virtio disk sleep/wakeup 和 UART TX sleep/wakeup 均已恢复为 xv6 原本路径，virtio/UART 完成事件分别通过 PLIC source 1 和 source 10 外部中断唤醒。
 
 这一步把完整 boot 的命令入口、disk image 注入路径和可复测镜像固定下来。后续可以继续把 smoke 镜像逐项恢复到 stock xv6 行为，用来反向补齐剩余的中断驱动 virtio/UART 细节。
 
@@ -1377,10 +1377,10 @@ make test-labplus-xv6boot-check
 make test-labplus-xv6boot-check XV6_BOOT_EXPECT="xv6 kernel is booting"
 ```
 
-本次实际运行：
+本次实际运行时，为避免重复重建 Verilator 模型，复用已经生成的 `build/emu` 直接长跑：
 
 ```bash
-CCACHE_DISABLE=1 make test-labplus-xv6boot-check XV6_MAX_CYCLES=220000000 XV6_BOOT_EXPECT="init: starting sh"
+TEST=xv6 ./build/emu --no-diff -i /mnt/e/26-Arch/ready-to-run/xv6/kernel.bin -C 420000000
 ```
 
 关键输出：
@@ -1394,12 +1394,10 @@ xv6 kernel is booting
 [boot] init[0xb08]=0x113c23fa010113
 init: starting sh
 Core 0: EXCEEDING CYCLE/INSTR LIMIT at pc = 0x0
-instrCnt = 20393057, cycleCnt = 219999999, IPC = 0.092696
-xv6 boot marker found: 'init: starting sh'
-xv6 boot log written: /mnt/e/26-Arch/build/xv6/boot.log
+instrCnt = 72659841, cycleCnt = 419999999, IPC = 0.173000
 ```
 
-这里的 cycle limit 是预期结束方式：目标字符串已经出现，随后 xv6 继续推进到 shell 进程路径并等待后续交互，仿真继续空转直到达到 `XV6_MAX_CYCLES`。第一次复现时 `/init` 在 `sepc=0xb08` 处取到 0，最终定位到 virtio 模型只复制 512B data descriptor；修复为按 `desc1_len` 搬运多个 sector 后，`init[0xb08]` 变为真实指令字节并成功进入 shell banner。随后又撤回 virtio disk 和 UART TX 的 polling workaround，日志中连续出现 `devintr irq=1/10`，证明 PLIC source 1/10 和 S external interrupt 唤醒路径可以支撑 `fsinit` 与 `uartwrite`。
+这里的 cycle limit 是预期结束方式：目标字符串已经出现，随后 xv6 继续推进到 shell 进程路径并等待后续交互，仿真继续空转直到达到 cycle budget。第一次复现时 `/init` 在 `sepc=0xb08` 处取到 0，最终定位到 virtio 模型只复制 512B data descriptor；修复为按 `desc1_len` 搬运多个 sector 后，`init[0xb08]` 变为真实指令字节并成功进入 shell banner。随后又撤回 virtio disk 和 UART TX 的 polling workaround，日志中连续出现 `devintr irq=1/10`，证明 PLIC source 1/10 和 S external interrupt 唤醒路径可以支撑 `fsinit` 与 `uartwrite`。恢复 allocator poison fill 后，220M cycle 只够跑到 `fsinit` 中段，420M cycle 可以到 `init: starting sh`；`tools/check_xv6_boot.py` 已经补充 ANSI/计时输出过滤，避免 `now = ...s` 插入 UART 字符之间导致 marker 误判。
 
 ### 7.16.2 Sstc/stimecmp 定向测试
 
@@ -1608,7 +1606,7 @@ timing status: constraints not met, usable for bring-up observation but should b
 
 本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、Sstc `menvcfg.STCE/stimecmp` 兼容、xv6 start CSR 序列、标准 counter CSR 与 `mcounteren/scounteren` 门控、机器 ID/ISA/envcfg CSR 兼容、AMO.D、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、mstatus TSR/TW/TVM 限制、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，以及 `test-labplus-xv6boot` raw kernel/fs.img 运行入口，并补了独立 page fault、S timer/software/external interrupt、M timer from S-mode、timervec SSIP handoff、Sstc/stimecmp、xv6 start CSR、SFENCE.VMA、WFI、mstatus restrict、CSR counter/mcountinhibit/machine-id/envcfg、AMO.D、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。当前 no-RVC xv6 smoke 镜像已经可以 boot 到 `init: starting sh` shell banner。后续如果继续推进到更接近 stock xv6，需要补充：
 
-- 逐步撤回 smoke 镜像中的测试向改动：恢复 stock `PHYSTOP` 和 allocator poison fill，观察新增阻塞点。
+- 逐步撤回 smoke 镜像中的测试向改动：恢复 stock `PHYSTOP`，观察新增阻塞点。
 - 支持或明确禁止 RVC：当前 core 以 no-RVC xv6 镜像验证；若要直接运行 xv6 默认 `rv64gc`，需要实现 RVC 取指/解码或保持构建参数固定为 `rv64ima_zicsr_zifencei`。
 - 根据 stock xv6 的真实启动串口日志继续补缺失的 CSR、PTE flag、trap corner case 或 virtio/PLIC/UART 行为。
 - 更高级的 virtio block queue 行为、packed queue、动态配置变更通知和更完整的 config 字段。

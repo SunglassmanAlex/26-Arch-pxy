@@ -13,8 +13,7 @@ The kernel image was built from MIT xv6-riscv for a no-RVC core:
 ```
 
 The smoke image is intentionally trimmed for RTL simulation speed and current
-platform coverage: `PHYSTOP` is reduced to 16 MiB and allocator poison fills
-are disabled. Virtio disk and UART TX both use xv6's normal interrupt-driven
-sleep/wakeup paths through the PLIC.
+platform coverage: `PHYSTOP` is reduced to 16 MiB. Virtio disk, UART TX, and
+allocator poison fills use xv6's normal paths.
 It is meant to verify that the CPU, Sv39, S-mode trap path, PLIC/UART, and
 virtio block model can boot xv6 to the shell banner (`init: starting sh`).
