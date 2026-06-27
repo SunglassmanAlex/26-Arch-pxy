@@ -70,10 +70,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def stop_process_tree(proc: subprocess.Popen[str]) -> None:
-    """Stop make and its emulator child after the requested marker is observed."""
+    """Stop the emulator after the requested marker is observed."""
     if proc.poll() is not None:
         return
     if os.name == "posix":
+        descendants = collect_descendants(proc.pid)
+        if descendants:
+            for pid in reversed(descendants):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    pass
+            return
         try:
             os.killpg(proc.pid, signal.SIGTERM)
             return
@@ -82,6 +92,29 @@ def stop_process_tree(proc: subprocess.Popen[str]) -> None:
         except OSError:
             pass
     proc.terminate()
+
+
+def read_child_pids(pid: int) -> list[int]:
+    children_path = Path("/proc") / str(pid) / "task" / str(pid) / "children"
+    try:
+        text = children_path.read_text(encoding="ascii")
+    except OSError:
+        return []
+    return [int(value) for value in text.split() if value.isdigit()]
+
+
+def collect_descendants(pid: int) -> list[int]:
+    descendants: list[int] = []
+    seen: set[int] = set()
+    stack = read_child_pids(pid)
+    while stack:
+        child = stack.pop()
+        if child in seen:
+            continue
+        seen.add(child)
+        descendants.append(child)
+        stack.extend(read_child_pids(child))
+    return descendants
 
 
 def main() -> int:
