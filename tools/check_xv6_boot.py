@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -70,8 +72,6 @@ def main() -> int:
     log_path = args.log
     if not log_path.is_absolute():
         log_path = REPO_ROOT / log_path
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
     cmd = [
         "make",
         "test-labplus-xv6boot",
@@ -82,22 +82,32 @@ def main() -> int:
     if args.vopt:
         cmd.append(f"VOPT={args.vopt}")
 
+    tmp_fd, tmp_name = tempfile.mkstemp(prefix="xv6-boot-", suffix=".log")
+    tmp_path = Path(tmp_name)
+
     print("running:", " ".join(str(part) for part in cmd))
-    with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=REPO_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            print(line, end="")
-            log_file.write(line)
-        rc = proc.wait()
+    try:
+        with open(tmp_fd, "w", encoding="utf-8", errors="replace") as log_file:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                print(line, end="")
+                log_file.write(line)
+            rc = proc.wait()
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(tmp_path), str(log_path))
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
     if rc != 0:
         print(f"xv6 boot command failed with exit code {rc}; log: {log_path}", file=sys.stderr)

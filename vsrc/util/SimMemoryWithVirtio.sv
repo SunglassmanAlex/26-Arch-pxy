@@ -814,10 +814,13 @@ module SimMemoryWithVirtio
         u8 status;
         u32 used_len;
         int disk_base_word;
+        int sector_idx;
+        int mem_byte_base;
         int range_sector_idx;
         word_t write_word;
         word_t range_sector;
         u32 range_num_sectors;
+        u32 transfer_sectors;
         logic status_desc_valid;
         addr_t status_desc_addr;
         begin
@@ -921,8 +924,9 @@ module SimMemoryWithVirtio
             else if (((desc0_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
                 ((desc1_flags & VIRTQ_DESC_F_NEXT) == 16'd0) ||
                 (desc0_len < 32'd16) || (desc1_len < 32'd512) || (desc2_len < 32'd1) ||
-                !status_desc_valid ||
-                (req_sector >= 64'(SIMPLE_BLK_SECTORS))) begin
+                !status_desc_valid || (desc1_len[8:0] != 9'd0) ||
+                (req_sector >= 64'(SIMPLE_BLK_SECTORS)) ||
+                ((req_sector + 64'(desc1_len >> 9)) > 64'(SIMPLE_BLK_SECTORS))) begin
                 status = VIRTIO_BLK_S_IOERR;
             end
             else if (req_type == VIRTIO_BLK_T_IN) begin
@@ -930,17 +934,22 @@ module SimMemoryWithVirtio
                     status = VIRTIO_BLK_S_IOERR;
                 end
                 else begin
-                    disk_base_word = int'(req_sector[31:0]) * SIMPLE_BLK_WORDS_PER_SECTOR;
-                    for (int word_idx = 0; word_idx < SIMPLE_BLK_WORDS_PER_SECTOR; word_idx += 1) begin
-                        for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
-                            ram_write_byte_addr(
-                                desc1_addr + 64'(word_idx * 8 + byte_idx),
-                                disk[disk_base_word + word_idx][byte_idx * 8 +: 8]
-                            );
+                    transfer_sectors = desc1_len >> 9;
+                    for (sector_idx = 0; sector_idx < int'(transfer_sectors); sector_idx += 1) begin
+                        disk_base_word = (int'(req_sector[31:0]) + sector_idx) *
+                            SIMPLE_BLK_WORDS_PER_SECTOR;
+                        mem_byte_base = sector_idx * 512;
+                        for (int word_idx = 0; word_idx < SIMPLE_BLK_WORDS_PER_SECTOR; word_idx += 1) begin
+                            for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+                                ram_write_byte_addr(
+                                    desc1_addr + 64'(mem_byte_base) + 64'(word_idx * 8 + byte_idx),
+                                    disk[disk_base_word + word_idx][byte_idx * 8 +: 8]
+                                );
+                            end
                         end
                     end
                     status = VIRTIO_BLK_S_OK;
-                    used_len = 32'd513;
+                    used_len = desc1_len + 32'd1;
                 end
             end
             else if (req_type == VIRTIO_BLK_T_OUT) begin
@@ -948,14 +957,20 @@ module SimMemoryWithVirtio
                     status = VIRTIO_BLK_S_IOERR;
                 end
                 else begin
-                    disk_base_word = int'(req_sector[31:0]) * SIMPLE_BLK_WORDS_PER_SECTOR;
-                    for (int word_idx = 0; word_idx < SIMPLE_BLK_WORDS_PER_SECTOR; word_idx += 1) begin
-                        write_word = '0;
-                        for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
-                            write_word[byte_idx * 8 +: 8] =
-                                ram_read_byte_addr(desc1_addr + 64'(word_idx * 8 + byte_idx));
+                    transfer_sectors = desc1_len >> 9;
+                    for (sector_idx = 0; sector_idx < int'(transfer_sectors); sector_idx += 1) begin
+                        disk_base_word = (int'(req_sector[31:0]) + sector_idx) *
+                            SIMPLE_BLK_WORDS_PER_SECTOR;
+                        mem_byte_base = sector_idx * 512;
+                        for (int word_idx = 0; word_idx < SIMPLE_BLK_WORDS_PER_SECTOR; word_idx += 1) begin
+                            write_word = '0;
+                            for (int byte_idx = 0; byte_idx < 8; byte_idx += 1) begin
+                                write_word[byte_idx * 8 +: 8] =
+                                    ram_read_byte_addr(desc1_addr + 64'(mem_byte_base) +
+                                        64'(word_idx * 8 + byte_idx));
+                            end
+                            disk[disk_base_word + word_idx] <= write_word;
                         end
-                        disk[disk_base_word + word_idx] <= write_word;
                     end
                     status = VIRTIO_BLK_S_OK;
                 end
