@@ -38,6 +38,7 @@ no_arguments:
 	@echo "  - test-labplus-xv6boot: Run xv6 kernel image with optional fs.img"
 	@echo "  - test-labplus-xv6boot-check: Run xv6 boot and check a console marker"
 	@echo "  - test-labplus-xv6shell-check: Run xv6 boot, inject a UART shell command, and check output"
+	@echo "  - test-labplus-xv6ls-check: Run xv6 shell ls and check directory output"
 	@echo "  - xv6-prepare-images: Convert/stage xv6 kernel ELF and fs.img"
 	@echo "  - test-labplus-vivado-precheck: Run Lab+ Vivado project static pre-board check"
 	@echo "  - test-labplus-board-device: Run Lab+ Nexys4 board device UART/LED test"
@@ -83,6 +84,9 @@ XV6_SHELL_INPUT_HEX ?= 6563686f207876362d7368656c6c2d6f6b0a
 XV6_SHELL_INPUT_GAP ?= 100000
 XV6_SHELL_EXPECT ?= xv6-shell-ok
 XV6_SHELL_LOG ?= build/xv6/shell.log
+XV6_LS_INPUT_HEX ?= 6c730a
+XV6_LS_EXPECT ?= README
+XV6_LS_LOG ?= build/xv6/ls.log
 XV6_SRC ?=
 XV6_KERNEL_ELF ?=
 XV6_FS_IMG ?=
@@ -359,6 +363,15 @@ test-labplus-xv6shell-check:
 	  --expect "$(XV6_SHELL_EXPECT)" \
 	  --log "$(XV6_SHELL_LOG)"
 
+test-labplus-xv6ls-check:
+	python3 tools/check_xv6_boot.py \
+	  --kernel "$(XV6_KERNEL)" \
+	  --fs "$(XV6_FS)" \
+	  --max-cycles "$(XV6_SHELL_MAX_CYCLES)" \
+	  --vopt "-- +uart_input_hex=$(XV6_LS_INPUT_HEX) +uart_input_gap=$(XV6_SHELL_INPUT_GAP) $(VOPT)" \
+	  --expect "$(XV6_LS_EXPECT)" \
+	  --log "$(XV6_LS_LOG)"
+
 xv6-prepare-images:
 	python3 tools/prepare_xv6_images.py \
 	  $(if $(XV6_SRC),--xv6-src $(XV6_SRC)) \
@@ -444,4 +457,4 @@ include verilate/Makefile.include
 include verilate/Makefile.verilate.mk
 include verilate/Makefile.vsim.mk
 
-.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-xv6boot test-labplus-xv6boot-check test-labplus-xv6shell-check xv6-prepare-images test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-mcountinhibit test-labplus-mstatus-restrict test-labplus-mprv test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-sstc test-labplus-xv6start test-labplus-ssoftint test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
+.PHONY: emu clean sim test-labplus-preboard test-labplus-xv6smoke test-labplus-xv6boot test-labplus-xv6boot-check test-labplus-xv6shell-check test-labplus-xv6ls-check xv6-prepare-images test-labplus-vivado-precheck test-labplus-board-device test-labplus-board-soc-trace test-labplus-counters test-labplus-mcountinhibit test-labplus-mstatus-restrict test-labplus-mprv test-labplus-csr-id test-labplus-csr-envcfg test-labplus-amo-d test-labplus-mtimer test-labplus-timervec test-labplus-sstc test-labplus-xv6start test-labplus-ssoftint test-labplus-sextint vivado-nexys4-bitstream vivado-nexys4-program nexys4-uart-check
