@@ -1377,27 +1377,33 @@ make test-labplus-xv6boot-check
 make test-labplus-xv6boot-check XV6_BOOT_EXPECT="xv6 kernel is booting"
 ```
 
-本次实际运行时，为避免重复重建 Verilator 模型，复用已经生成的 `build/emu` 直接长跑：
+当前默认 `XV6_MAX_CYCLES` 已调为 `420000000`，用于覆盖保留 allocator poison fill 后的较慢早期 `kinit`。如果只验证更早串口输出，可以手动降低该值。
+
+本次最终验证直接使用默认入口：
 
 ```bash
-TEST=xv6 ./build/emu --no-diff -i /mnt/e/26-Arch/ready-to-run/xv6/kernel.bin -C 420000000
+CCACHE_DISABLE=1 make test-labplus-xv6boot-check
 ```
 
-关键输出：
+关键输出如下。最终镜像已经移除调试阶段的自定义 `[boot] ...` 打印，只保留 xv6 原生启动输出和仿真器计时/收尾信息：
 
 ```text
 xv6 kernel is booting
-[boot] devintr irq=1
-[boot] devintr irq=10
-[boot] fsinit done
-[boot] kexec init ret 1
-[boot] init[0xb08]=0x113c23fa010113
+now = 60s
+now = 120s
+now = 180s
+now = 240s
+now = 300s
+now = 360s
+now = 420s
 init: starting sh
+now = 480s
 Core 0: EXCEEDING CYCLE/INSTR LIMIT at pc = 0x0
-instrCnt = 72659841, cycleCnt = 419999999, IPC = 0.173000
+instrCnt = 73312399, cycleCnt = 419999999, IPC = 0.174553
+xv6 boot marker found: 'init: starting sh'
 ```
 
-这里的 cycle limit 是预期结束方式：目标字符串已经出现，随后 xv6 继续推进到 shell 进程路径并等待后续交互，仿真继续空转直到达到 cycle budget。第一次复现时 `/init` 在 `sepc=0xb08` 处取到 0，最终定位到 virtio 模型只复制 512B data descriptor；修复为按 `desc1_len` 搬运多个 sector 后，`init[0xb08]` 变为真实指令字节并成功进入 shell banner。随后又撤回 virtio disk 和 UART TX 的 polling workaround，日志中连续出现 `devintr irq=1/10`，证明 PLIC source 1/10 和 S external interrupt 唤醒路径可以支撑 `fsinit` 与 `uartwrite`。恢复 allocator poison fill 后，220M cycle 只够跑到 `fsinit` 中段，420M cycle 可以到 `init: starting sh`；`tools/check_xv6_boot.py` 已经补充 ANSI/计时输出过滤，避免 `now = ...s` 插入 UART 字符之间导致 marker 误判。
+这里的 cycle limit 是预期结束方式：目标字符串已经出现，随后 xv6 继续推进到 shell 进程路径并等待后续交互，仿真继续空转直到达到 cycle budget。第一次复现时 `/init` 在 `sepc=0xb08` 处取到 0，最终定位到 virtio 模型只复制 512B data descriptor；修复为按 `desc1_len` 搬运多个 sector 后，调试镜像中 `init[0xb08]` 变为真实指令字节并成功进入 shell banner。随后又撤回 virtio disk 和 UART TX 的 polling workaround，调试阶段日志中连续出现 `devintr irq=1/10`，证明 PLIC source 1/10 和 S external interrupt 唤醒路径可以支撑 `fsinit` 与 `uartwrite`。恢复 allocator poison fill 后，220M cycle 只够跑到 `fsinit` 中段，420M cycle 可以到 `init: starting sh`；`tools/check_xv6_boot.py` 已经补充 ANSI/计时输出过滤，避免 `now = ...s` 插入 UART 字符之间导致 marker 误判。最后重新构建了一版不含 `[boot]` 调试打印的默认 `kernel.bin`，`test-labplus-xv6boot-check` 仍可通过。
 
 ### 7.16.2 Sstc/stimecmp 定向测试
 

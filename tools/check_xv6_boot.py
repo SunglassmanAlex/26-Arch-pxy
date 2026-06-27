@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--max-cycles",
-        default="5000000",
+        default="420000000",
         help="Cycle budget passed as XV6_MAX_CYCLES.",
     )
     parser.add_argument(

@@ -17,3 +17,5 @@ platform coverage: `PHYSTOP` is reduced to 16 MiB. Virtio disk, UART TX, and
 allocator poison fills use xv6's normal paths.
 It is meant to verify that the CPU, Sv39, S-mode trap path, PLIC/UART, and
 virtio block model can boot xv6 to the shell banner (`init: starting sh`).
+The staged kernel does not include the temporary `[boot]` debug prints used
+during bring-up.

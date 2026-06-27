@@ -74,7 +74,7 @@ export NEMU_HOME=$(abspath ./ready-to-run)
 
 XV6_KERNEL ?= ready-to-run/xv6/kernel.bin
 XV6_FS ?= ready-to-run/xv6/fs.img
-XV6_MAX_CYCLES ?= 5000000
+XV6_MAX_CYCLES ?= 420000000
 XV6_BOOT_EXPECT ?= init: starting sh
 XV6_BOOT_LOG ?= build/xv6/boot.log
 XV6_SRC ?=
