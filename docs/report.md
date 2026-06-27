@@ -44,6 +44,7 @@
 - 新增 xv6 `cat README` 文件读取检查入口：`make test-labplus-xv6cat-check` 在 shell 中注入 `cat README`，检查 README 正文输出，进一步覆盖普通文件内容读取路径。
 - 新增 xv6 `grep xv6 README` 文本扫描检查入口：`make test-labplus-xv6grep-check` 在 shell 中注入带参数用户命令，检查 README 匹配行输出，覆盖 argv 传递、文件读取和用户态文本处理。
 - 新增 xv6 `wc README` 文件统计检查入口：`make test-labplus-xv6wc-check` 在 shell 中注入 `wc README`，检查 README 字节统计输出，覆盖完整文件流式读取和用户态计数逻辑。
+- 新增 xv6 userland smoke 汇总入口：`make test-labplus-xv6user-check` 顺序运行 shell、`ls`、`cat`、`grep` 和 `wc` 五个 smoke，便于后续一键回归。
 - 新增 xv6 镜像准备入口：`make xv6-prepare-images XV6_SRC=/path/to/xv6-riscv` 可调用 RISC-V `objcopy` 将 `kernel/kernel` 转为 `ready-to-run/xv6/kernel.bin`，并复制 `fs.img`，为后续 boot target 固定产物路径。
 - 新增可直接复测的 no-RVC xv6 boot smoke 镜像：使用 `rv64ima_zicsr_zifencei/lp64` 构建并放入 `ready-to-run/xv6/`，当前 boot check 已观察到 `init: starting sh`，shell 交互检查已观察到 `xv6-shell-ok`，`ls` 检查已观察到 `README` 目录项，`cat README` 与 `grep xv6 README` 检查已观察到 README 正文，`wc README` 检查已观察到 `2441 README`。
 - 修复 virtio block 标准 virtqueue 的多扇区 data descriptor：xv6 的文件系统 block 为 1024B，旧模型只搬运首个 512B sector，导致 `/init` 后半段被读成 0；当前按 `desc1_len` 的 512B 整数倍循环搬运并返回正确 `used_len`。
@@ -77,7 +78,7 @@
 - 新增 Sstc 定向测试，覆盖 `menvcfg.STCE`、S 态写 `stimecmp` 和 delegated supervisor timer interrupt。
 - 新增 xv6 start CSR 定向测试，覆盖新版 xv6 进入 S-mode 前的主要机器态 CSR 初始化序列。
 - 新增 AMO.D 定向测试，覆盖 `AMOSWAP.D/AMOADD.D/LR.D/SC.D` 成功路径和无 reservation 的 `SC.D` 失败路径。
-- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-mprv`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-xv6boot-check`、`test-labplus-xv6shell-check`、`test-labplus-xv6ls-check`、`test-labplus-xv6cat-check`、`test-labplus-xv6grep-check`、`test-labplus-xv6wc-check`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
+- 新增 `test-labplus-2/3/4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-mprv`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-xv6boot-check`、`test-labplus-xv6shell-check`、`test-labplus-xv6ls-check`、`test-labplus-xv6cat-check`、`test-labplus-xv6grep-check`、`test-labplus-xv6wc-check`、`test-labplus-xv6user-check`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace` 与 `test-labplus-preboard` Makefile 测试入口，并补入官方 Lab+ ready-to-run 测试文件。
 
 本次新增通过的核心测试为 atomic extension、AMO.D 定向测试、privileged/PMP sys-test、MMU page fault/MPRV 定向测试、S 态中断定向测试、S 态软件中断定向测试、S 态外部中断定向测试、M timer from S-mode 定向测试、timervec SSIP handoff 定向测试、Sstc/stimecmp 定向测试、xv6 start CSR 定向测试、SFENCE.VMA 定向测试、WFI 定向测试、mstatus TSR/TW/TVM 定向测试、mstatus MPRV 数据权限定向测试、CSR counter 定向测试、CSR mcountinhibit 定向测试、CSR machine-id 定向测试、CSR envcfg 定向测试、CLINT 地址别名定向测试、PLIC MMIO 定向测试、UART MMIO 定向测试、simple virtio block/virtqueue MMIO 定向测试、xv6/QEMU platform smoke 集成测试、xv6 boot 到 `init: starting sh` smoke 测试、xv6 shell 交互 smoke 测试、xv6 `ls` 目录读取 smoke 测试、xv6 `cat README` 文件读取 smoke 测试、xv6 `grep xv6 README` 文本扫描 smoke 测试、xv6 `wc README` 文件统计 smoke 测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 UART 两行前缀 trace。`lab+/4` 全量 `TEST=all` 已完成 benchmark 和 sys-test，最终输出 `Privileged test finished. Exit with code = 0`。当前官方 `all-test-privfull.bin` 中未包含真实 `ebreak` 指令，`breakpoint [X]` 来自测试程序自身的占位输出；补充 `EBREAK` 后该输出仍不会变化，不影响最终 privileged 测试收尾。
 
@@ -533,7 +534,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
 - `docs/nexys4_bringup.md`
   - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-xv6boot-check`、`test-labplus-xv6shell-check`、`test-labplus-xv6ls-check`、`test-labplus-xv6cat-check`、`test-labplus-xv6grep-check`、`test-labplus-xv6wc-check`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`test-labplus-xv6boot` 检查 `XV6_KERNEL` raw binary，按需 stage `XV6_FS` 到 `build/xv6/fs.img` 并用 `--no-diff` 启动 emu；该目标现在使用增量 `emu` 构建而不是每次清空 `build`，重复跑 xv6 检查时可以复用已有 Verilator 产物；`test-labplus-xv6shell-check` 通过 UART 输入脚本执行 `echo xv6-shell-ok`，`test-labplus-xv6ls/cat/grep/wc-check` 分别执行 README 目录、正文、文本扫描和统计检查；`xv6-prepare-images` 将已有 xv6 ELF/`fs.img` 转换并 stage 到默认 boot 路径；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-xv6boot-check`、`test-labplus-xv6shell-check`、`test-labplus-xv6ls-check`、`test-labplus-xv6cat-check`、`test-labplus-xv6grep-check`、`test-labplus-xv6wc-check`、`test-labplus-xv6user-check`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`test-labplus-xv6boot` 检查 `XV6_KERNEL` raw binary，按需 stage `XV6_FS` 到 `build/xv6/fs.img` 并用 `--no-diff` 启动 emu；该目标现在使用增量 `emu` 构建而不是每次清空 `build`，重复跑 xv6 检查时可以复用已有 Verilator 产物；`test-labplus-xv6shell-check` 通过 UART 输入脚本执行 `echo xv6-shell-ok`，`test-labplus-xv6ls/cat/grep/wc-check` 分别执行 README 目录、正文、文本扫描和统计检查，`test-labplus-xv6user-check` 顺序运行这些 userland smoke；`xv6-prepare-images` 将已有 xv6 ELF/`fs.img` 转换并 stage 到默认 boot 路径；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -1534,6 +1535,16 @@ xv6 boot marker found: '2441 README'
 ```
 
 `wc` 需要反复 `read` 文件内容并在用户态统计行数、单词数和字节数。该测试与 `cat/grep` 一起覆盖了同一个 README 普通文件的直接输出、文本匹配和完整统计三种访问形态，能更稳定地证明当前 virtio block、文件系统和用户态系统调用路径可用。
+
+### 7.16.1.6 xv6 userland 汇总入口
+
+为后续复测新增汇总目标：
+
+```bash
+make test-labplus-xv6user-check
+```
+
+该目标顺序运行 `test-labplus-xv6shell-check`、`test-labplus-xv6ls-check`、`test-labplus-xv6cat-check`、`test-labplus-xv6grep-check` 和 `test-labplus-xv6wc-check`。本次已经分别验证五个子目标通过，因此汇总入口主要用于后续改动后的集中回归。
 
 ### 7.16.2 Sstc/stimecmp 定向测试
 
