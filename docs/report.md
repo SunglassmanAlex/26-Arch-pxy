@@ -42,6 +42,7 @@
 - 新增 xv6 镜像准备入口：`make xv6-prepare-images XV6_SRC=/path/to/xv6-riscv` 可调用 RISC-V `objcopy` 将 `kernel/kernel` 转为 `ready-to-run/xv6/kernel.bin`，并复制 `fs.img`，为后续 boot target 固定产物路径。
 - 新增可直接复测的 no-RVC xv6 boot smoke 镜像：使用 `rv64ima_zicsr_zifencei/lp64` 构建并放入 `ready-to-run/xv6/`，当前 `make test-labplus-xv6boot-check XV6_MAX_CYCLES=220000000` 已检测到 `init: starting sh`，说明 xv6 已启动到 shell banner。
 - 修复 virtio block 标准 virtqueue 的多扇区 data descriptor：xv6 的文件系统 block 为 1024B，旧模型只搬运首个 512B sector，导致 `/init` 后半段被读成 0；当前按 `desc1_len` 的 512B 整数倍循环搬运并返回正确 `used_len`。
+- 恢复 xv6 virtio disk 的中断驱动 sleep/wakeup 路径：boot 日志中可以看到 `devintr irq=1`，说明 virtio source 1 经 PLIC 进入 S external interrupt，`fsinit` 不再依赖 polling。
 - 新增 Sstc/`stimecmp` 兼容：支持 M 态设置 `menvcfg.STCE`，S 态访问 `stimecmp(0x14d)`，并在 `mcycle >= stimecmp` 时产生 delegated STIP，覆盖新版 xv6 `timerinit()` 的 supervisor timer setup 路径。
 - 新增 xv6 start CSR 序列定向测试：按 xv6 `start.c` 风格覆盖 `satp=0`、异常/中断委托、S 态中断使能、PMP 全内存、`menvcfg.STCE`、`mcounteren.TM`、`stimecmp` 和 `mret` 到 S-mode。
 - 新增 Vivado 上板前静态检查：解析 `project_1.xpr`、Nexys4 DDR XDC 和顶层 wrapper，确认 part、工程文件、约束端口管脚和 `basys3_top` 兼容包装没有跑偏；同时检查已有 bitstream、route status、routed DRC 和 timing summary，确认 route errors=0、DRC violations=0，并在 WNS 或 timing constraints 未收敛时给出 warning。
@@ -520,7 +521,7 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
   - 新增 xv6 boot 日志检查脚本，包装 `make test-labplus-xv6boot`，保存 combined stdout/stderr 到 `build/xv6/boot.log`，并用 `XV6_BOOT_EXPECT` 指定的串口输出片段判断 boot 里程碑是否到达。
   - 修复 `make sim` 会先删除 `build/` 导致日志文件被删的问题：运行期间先写 `/tmp` 临时日志，仿真结束后再创建 `build/xv6` 并移动日志；移动使用 `shutil.move`，避免 `/tmp` 到 `/mnt/e` 跨文件系统时 `os.replace` 失败。
 - `ready-to-run/xv6/`
-  - 新增 no-RVC xv6 boot smoke 镜像和 README。镜像用于当前无 RVC CPU 的 RTL smoke，构建目标为 `rv64ima_zicsr_zifencei/lp64`，并做了降低仿真成本的 xv6 测试配置；默认 boot check 可以直接使用该路径。
+  - 新增 no-RVC xv6 boot smoke 镜像和 README。镜像用于当前无 RVC CPU 的 RTL smoke，构建目标为 `rv64ima_zicsr_zifencei/lp64`，并做了降低仿真成本的 xv6 测试配置；virtio disk 已恢复为正常中断驱动 sleep/wakeup，默认 boot check 可以直接使用该路径。
 - `docs/nexys4_bringup.md`
   - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
@@ -1347,7 +1348,7 @@ make test-labplus-xv6boot XV6_KERNEL=/path/to/kernel.bin XV6_FS=/path/to/fs.img
 
 `XV6_KERNEL` 要求是链接到 `0x80000000` 后转换出的 raw binary；如果手上是 xv6 的 ELF `kernel/kernel`，需要先用 RISC-V `objcopy -O binary` 转成 flat binary。`XV6_FS` 是可选文件系统镜像，目标会在运行前复制到 `build/xv6/fs.img`，`SimMemoryWithVirtio` reset 时会自动把它作为 simple/virtio block 的初始磁盘内容；如果没有提供，则仍使用默认 `SBLK` pattern，便于先观察内核早期串口输出。
 
-本次已经补入默认 smoke 镜像：`ready-to-run/xv6/kernel.bin` 和 `ready-to-run/xv6/fs.img`。由于当前 CPU 没有启用 RVC，MIT xv6 默认的 `rv64gc` 镜像会在压缩指令处失败；本次使用 `rv64ima_zicsr_zifencei/lp64` 重新构建。为了让 RTL 仿真在可接受时间内跑到 shell banner，smoke 镜像还做了以下测试向配置：`PHYSTOP=16MiB`、关闭 allocator poison fill、virtio disk 改为 polling、UART TX 改为同步 polling。
+本次已经补入默认 smoke 镜像：`ready-to-run/xv6/kernel.bin` 和 `ready-to-run/xv6/fs.img`。由于当前 CPU 没有启用 RVC，MIT xv6 默认的 `rv64gc` 镜像会在压缩指令处失败；本次使用 `rv64ima_zicsr_zifencei/lp64` 重新构建。为了让 RTL 仿真在可接受时间内跑到 shell banner，smoke 镜像还做了以下测试向配置：`PHYSTOP=16MiB`、关闭 allocator poison fill、UART TX 改为同步 polling。virtio disk 已经从 polling workaround 恢复为 xv6 原本的 sleep/wakeup 路径，完成事件通过 PLIC source 1 外部中断唤醒。
 
 这一步把完整 boot 的命令入口、disk image 注入路径和可复测镜像固定下来。后续可以继续把 smoke 镜像逐项恢复到 stock xv6 行为，用来反向补齐剩余的中断驱动 virtio/UART 细节。
 
@@ -1385,17 +1386,18 @@ CCACHE_DISABLE=1 make test-labplus-xv6boot-check XV6_MAX_CYCLES=220000000 XV6_BO
 
 ```text
 xv6 kernel is booting
+[boot] devintr irq=1
 [boot] fsinit done
 [boot] kexec init ret 1
 [boot] init[0xb08]=0x113c23fa010113
 init: starting sh
-$ Core 0: EXCEEDING CYCLE/INSTR LIMIT at pc = 0x80002470
-instrCnt = 20946151, cycleCnt = 219999999, IPC = 0.095210
+Core 0: EXCEEDING CYCLE/INSTR LIMIT at pc = 0x0
+instrCnt = 20933109, cycleCnt = 219999999, IPC = 0.095150
 xv6 boot marker found: 'init: starting sh'
 xv6 boot log written: /mnt/e/26-Arch/build/xv6/boot.log
 ```
 
-这里的 cycle limit 是预期结束方式：目标字符串和 `$` shell prompt 已经出现，随后 xv6 在 shell 等待输入，仿真继续空转直到达到 `XV6_MAX_CYCLES`。第一次复现时 `/init` 在 `sepc=0xb08` 处取到 0，最终定位到 virtio 模型只复制 512B data descriptor；修复为按 `desc1_len` 搬运多个 sector 后，`init[0xb08]` 变为真实指令字节并成功进入 shell。
+这里的 cycle limit 是预期结束方式：目标字符串已经出现，随后 xv6 继续推进到 shell 进程路径并等待后续交互，仿真继续空转直到达到 `XV6_MAX_CYCLES`。第一次复现时 `/init` 在 `sepc=0xb08` 处取到 0，最终定位到 virtio 模型只复制 512B data descriptor；修复为按 `desc1_len` 搬运多个 sector 后，`init[0xb08]` 变为真实指令字节并成功进入 shell banner。随后又撤回 virtio disk polling workaround，日志中连续出现 `devintr irq=1`，证明 PLIC source 1 和 S external interrupt 唤醒路径可以支撑 `fsinit`。
 
 ### 7.16.2 Sstc/stimecmp 定向测试
 
@@ -1602,9 +1604,9 @@ timing status: constraints not met, usable for bring-up observation but should b
 
 ## 8. 后续可做项
 
-本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、Sstc `menvcfg.STCE/stimecmp` 兼容、xv6 start CSR 序列、标准 counter CSR 与 `mcounteren/scounteren` 门控、机器 ID/ISA/envcfg CSR 兼容、AMO.D、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、mstatus TSR/TW/TVM 限制、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，以及 `test-labplus-xv6boot` raw kernel/fs.img 运行入口，并补了独立 page fault、S timer/software/external interrupt、M timer from S-mode、timervec SSIP handoff、Sstc/stimecmp、xv6 start CSR、SFENCE.VMA、WFI、mstatus restrict、CSR counter/mcountinhibit/machine-id/envcfg、AMO.D、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。当前 no-RVC xv6 smoke 镜像已经可以 boot 到 `init: starting sh` 和 `$` shell prompt。后续如果继续推进到更接近 stock xv6，需要补充：
+本次已经完成 xv6 主线的更多基础外设路径：S-mode/trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、Sstc `menvcfg.STCE/stimecmp` 兼容、xv6 start CSR 序列、标准 counter CSR 与 `mcounteren/scounteren` 门控、机器 ID/ISA/envcfg CSR 兼容、AMO.D、MMU page fault/PTE 基础权限检查、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、mstatus TSR/TW/TVM 限制、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的块设备 MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，以及 `test-labplus-xv6boot` raw kernel/fs.img 运行入口，并补了独立 page fault、S timer/software/external interrupt、M timer from S-mode、timervec SSIP handoff、Sstc/stimecmp、xv6 start CSR、SFENCE.VMA、WFI、mstatus restrict、CSR counter/mcountinhibit/machine-id/envcfg、AMO.D、CLINT、PLIC、UART、simple-block/virtqueue 定向测试、xv6/QEMU platform smoke 集成测试、Vivado 上板前静态检查、Nexys4 board device UART/LED 定向测试和 `soc_top` 板级 trace。当前 no-RVC xv6 smoke 镜像已经可以 boot 到 `init: starting sh` shell banner。后续如果继续推进到更接近 stock xv6，需要补充：
 
-- 逐步撤回 smoke 镜像中的测试向改动：恢复 stock `PHYSTOP`、allocator poison fill、interrupt-driven virtio disk 和 interrupt-driven UART TX，观察新增阻塞点。
+- 逐步撤回 smoke 镜像中的测试向改动：恢复 stock `PHYSTOP`、allocator poison fill 和 interrupt-driven UART TX，观察新增阻塞点。
 - 支持或明确禁止 RVC：当前 core 以 no-RVC xv6 镜像验证；若要直接运行 xv6 默认 `rv64gc`，需要实现 RVC 取指/解码或保持构建参数固定为 `rv64ima_zicsr_zifencei`。
 - 根据 stock xv6 的真实启动串口日志继续补缺失的 CSR、PTE flag、trap corner case 或 virtio/PLIC/UART 行为。
 - 更高级的 virtio block queue 行为、packed queue、动态配置变更通知和更完整的 config 字段。
@@ -1616,7 +1618,7 @@ timing status: constraints not met, usable for bring-up observation but should b
 
 ## 9. 总结
 
-本次 Lab+ 新增完成了 atomic extension、AMO.D、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path、8B 指令行缓冲和 32 项 2-bit BHT 动态分支预测等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、Sstc `menvcfg.STCE/stimecmp` 兼容、xv6 start CSR 序列、标准 counter CSR 与 `mcounteren/scounteren/mcountinhibit` 门控、机器 ID/ISA/envcfg CSR 兼容、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、mstatus TSR/TW/TVM 限制、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，以及 `test-labplus-xv6boot` raw kernel/fs.img 运行入口。本轮进一步修复 virtio 多扇区 data descriptor，加入 no-RVC xv6 boot smoke 镜像，并通过 `test-labplus-xv6boot-check` 跑到 `init: starting sh` 和 `$` shell prompt。上板调试中先后修复了 UART 自动字符串发送时 `txData` 中途覆盖、`Hello World` 大小写不一致、TX_DATA backpressure 隔字丢失，以及 BRAM read response stale-ready 导致第二行 `R` 后取指错误的问题。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W/LR.D/SC.D` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93020，将 Lab4 周期数从 208529 降到 110572，atomicity 从 372 降到 197。最终 atomicity、Lab1 extra 和 Lab4 已完成动态 BHT 增量快速回归；Lab+ privileged sys-test、S-mode interrupt directed test、S software/external interrupt directed test、M timer from S-mode directed test、timervec SSIP directed test、Sstc directed test、xv6 start CSR directed test、SFENCE.VMA directed test、WFI directed test、mstatus restrict directed test、CSR counter/mcountinhibit/machine-id/envcfg directed test、AMO.D directed test、MMU page fault、CLINT/PLIC/UART/virtio/xv6 smoke、xv6boot 到 shell smoke 检查、Vivado pre-board、Nexys4 board device、`soc_top` board trace、Lab5、Lab6 沿用前序回归结果。
+本次 Lab+ 新增完成了 atomic extension、AMO.D、8-entry PMP/privfull 支持、`EBREAK` 断点异常、`FENCE/FENCE.I`/`WFI` 兼容，并加入顺序取指提前、CBus fast path、8B 指令行缓冲和 32 项 2-bit BHT 动态分支预测等前端性能优化。继续推进 xv6 主 Track 时，已完成 S-mode、`SRET`、trap delegation、S 态中断 pending 委托转换、S 态软件/外部中断交付、S 态运行时 M timer trap 覆盖、timervec SSIP handoff 覆盖、Sstc `menvcfg.STCE/stimecmp` 兼容、xv6 start CSR 序列、标准 counter CSR 与 `mcounteren/scounteren/mcountinhibit` 门控、机器 ID/ISA/envcfg CSR 兼容、MMU page fault/PTE 基础权限检查、`SUM/MXR` 权限补充、PTE A/D 位硬件更新、`SFENCE.VMA` 合法/非法路径覆盖、S/M 态 `WFI` 合法 no-op、mstatus TSR/TW/TVM 限制、CLINT legacy/QEMU 地址兼容、可从镜像初始化且支持 virtio-blk config、基础 feature negotiation、4 条 split queue virtqueue/QueueReset/indirect descriptor/multi-pending notify/event idx/reset/flush/discard/write-zeroes 子集的 virtio/disk MMIO、仿真侧 PLIC MMIO 模型、最小 16550 UART TX/RX FIFO/THRE/timeout/IIR FIFO-enabled bits/overrun/parity/framing/break/break-only/modem-status 模型，以及 `test-labplus-xv6boot` raw kernel/fs.img 运行入口。本轮进一步修复 virtio 多扇区 data descriptor，加入 no-RVC xv6 boot smoke 镜像，并恢复 virtio disk 中断驱动 sleep/wakeup 路径，通过 `test-labplus-xv6boot-check` 跑到 `init: starting sh` shell banner。上板调试中先后修复了 UART 自动字符串发送时 `txData` 中途覆盖、`Hello World` 大小写不一致、TX_DATA backpressure 隔字丢失，以及 BRAM read response stale-ready 导致第二行 `R` 后取指错误的问题。AMO 实现利用现有单发访存结构，将 AMO 指令拆成不可被其他指令插入的读-改-写序列，并为 `LR.W/SC.W/LR.D/SC.D` 添加 reservation 状态。性能优化将 Lab1 extra 周期数从 185976 降到 93020，将 Lab4 周期数从 208529 降到 110572，atomicity 从 372 降到 197。最终 atomicity、Lab1 extra 和 Lab4 已完成动态 BHT 增量快速回归；Lab+ privileged sys-test、S-mode interrupt directed test、S software/external interrupt directed test、M timer from S-mode directed test、timervec SSIP directed test、Sstc directed test、xv6 start CSR directed test、SFENCE.VMA directed test、WFI directed test、mstatus restrict directed test、CSR counter/mcountinhibit/machine-id/envcfg directed test、AMO.D directed test、MMU page fault、CLINT/PLIC/UART/virtio/xv6 smoke、xv6boot 到 shell smoke 检查、Vivado pre-board、Nexys4 board device、`soc_top` board trace、Lab5、Lab6 沿用前序回归结果。
 
 ## 10. AI 使用说明
 
