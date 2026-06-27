@@ -38,10 +38,10 @@
 - 新增仿真侧 16550 UART MMIO 模型：在 `0x10000000` 兼容 xv6/QEMU UART 初始化、TX 输出、THRE/FIFO timeout interrupt、16B RX FIFO/RBR 读取、FCR trigger/clear、IIR FIFO-enabled bits、LSR overrun/parity/framing/break、break-only line-status 和 MSR modem-status loopback，并将 UART interrupt 接到 PLIC source 10。
 - 新增 xv6/QEMU platform smoke 集成测试：在同一个 `SimMemoryWithVirtio` 实例中联测 CLINT、PLIC S context、UART source 10 和 virtio source 1，覆盖 xv6 常见的 PLIC claim 后读 UART RBR、标准 virtqueue read/write/readback 后 claim virtio 中断、virtio/uart 多源优先级仲裁和 complete 清中断路径。
 - 新增 xv6 boot 运行入口：`make test-labplus-xv6boot` 支持通过 `XV6_KERNEL=/path/to/kernel.bin` 加载 raw kernel，并可通过 `XV6_FS=/path/to/fs.img` 把文件系统镜像注入 `build/xv6/fs.img` 作为 virtio block 初始磁盘。
-- 新增 xv6 boot 检查入口：`make test-labplus-xv6boot-check` 会运行 boot target、保存 `build/xv6/boot.log`，并默认检查串口输出是否包含 `init: starting sh`，用于后续真实 xv6 镜像到位后自动判断是否已经 boot 到 shell。
-- 新增 xv6 shell 交互检查入口：`make test-labplus-xv6shell-check` 在 boot 到 `init: starting sh` 后经仿真 UART 注入 `echo xv6-shell-ok`，并检查 shell 输出，证明当前 no-RVC xv6 smoke 镜像已经能进入用户态 shell 并执行命令。
+- 新增 xv6 boot 检查入口：`make test-labplus-xv6boot-check` 会运行 boot target、保存 `build/xv6/boot.log`，并默认检查串口输出是否包含 `init: starting sh`；检查脚本现在在 marker 出现后会停止 emu，避免继续等到 cycle limit。
+- 新增 xv6 shell 交互检查入口：`make test-labplus-xv6shell-check` 在 boot 到 `init: starting sh` 后经仿真 UART 注入 `echo xv6-shell-ok`，并检查 shell 输出，证明当前 no-RVC xv6 smoke 镜像已经能进入用户态 shell 并执行命令；该路径同样支持 marker 提前停止。
 - 新增 xv6 镜像准备入口：`make xv6-prepare-images XV6_SRC=/path/to/xv6-riscv` 可调用 RISC-V `objcopy` 将 `kernel/kernel` 转为 `ready-to-run/xv6/kernel.bin`，并复制 `fs.img`，为后续 boot target 固定产物路径。
-- 新增可直接复测的 no-RVC xv6 boot smoke 镜像：使用 `rv64ima_zicsr_zifencei/lp64` 构建并放入 `ready-to-run/xv6/`，当前 420M cycle 长跑已观察到 `init: starting sh`，650M cycle shell 交互检查已观察到 `xv6-shell-ok`。
+- 新增可直接复测的 no-RVC xv6 boot smoke 镜像：使用 `rv64ima_zicsr_zifencei/lp64` 构建并放入 `ready-to-run/xv6/`，当前 boot check 已观察到 `init: starting sh`，shell 交互检查已观察到 `xv6-shell-ok`。
 - 修复 virtio block 标准 virtqueue 的多扇区 data descriptor：xv6 的文件系统 block 为 1024B，旧模型只搬运首个 512B sector，导致 `/init` 后半段被读成 0；当前按 `desc1_len` 的 512B 整数倍循环搬运并返回正确 `used_len`。
 - 恢复 xv6 virtio disk 的中断驱动 sleep/wakeup 路径：boot 日志中可以看到 `devintr irq=1`，说明 virtio source 1 经 PLIC 进入 S external interrupt，`fsinit` 不再依赖 polling。
 - 恢复 xv6 UART TX 的中断驱动 sleep/wakeup 路径：boot 日志中可以看到 `devintr irq=10`，说明 16550 THRE interrupt 经 PLIC source 10 正常唤醒 `uartwrite`。
@@ -523,12 +523,13 @@ STREAM Copy/Scale/Add/Triad: 19.3 / 1.1 / 2.3 / 1.1 MB/s
 - `tools/check_xv6_boot.py`
   - 新增 xv6 boot 日志检查脚本，包装 `make test-labplus-xv6boot`，保存 combined stdout/stderr 到 `build/xv6/boot.log`，并用 `XV6_BOOT_EXPECT` 指定的串口输出片段判断 boot 里程碑是否到达。
   - 修复 `make sim` 会先删除 `build/` 导致日志文件被删的问题：运行期间先写 `/tmp` 临时日志，仿真结束后再创建 `build/xv6` 并移动日志；移动使用 `shutil.move`，避免 `/tmp` 到 `/mnt/e` 跨文件系统时 `os.replace` 失败。
+  - 新增 marker early-stop：边读取 emu 输出边做 ANSI/计时行过滤，一旦目标字符串出现就停止子 `make/emu` 进程组并判定成功；如果需要完整跑到 cycle limit，可加 `--no-early-stop`。
 - `ready-to-run/xv6/`
   - 新增 no-RVC xv6 boot smoke 镜像和 README。镜像用于当前无 RVC CPU 的 RTL smoke，构建目标为 `rv64ima_zicsr_zifencei/lp64`，并做了降低仿真成本的 xv6 测试配置；virtio disk 和 UART TX 已恢复为正常中断驱动 sleep/wakeup，默认 boot check 可以直接使用该路径。
 - `docs/nexys4_bringup.md`
   - 新增 Nexys4 DDR 实体板测试前清单，固定当前 `.bit` 产物 manifest、Vivado routed report 状态、XDC 管脚表、串口 `9600 8N1` 参数、finish/LED/UART 预期行为、上板步骤和常见无输出排查项。
 - `Makefile`
-  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-xv6boot-check`、`test-labplus-xv6shell-check`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`test-labplus-xv6boot` 检查 `XV6_KERNEL` raw binary，按需 stage `XV6_FS` 到 `build/xv6/fs.img` 并用 `--no-diff` 启动 emu；`test-labplus-xv6shell-check` 通过 UART 输入脚本执行 `echo xv6-shell-ok`；`xv6-prepare-images` 将已有 xv6 ELF/`fs.img` 转换并 stage 到默认 boot 路径；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
+  - 新增 `test-labplus-2`、`test-labplus-3`、`test-labplus-4`、`test-labplus-pagefault`、`test-labplus-sinterrupt`、`test-labplus-ssoftint`、`test-labplus-sextint`、`test-labplus-mtimer`、`test-labplus-timervec`、`test-labplus-sstc`、`test-labplus-xv6start`、`test-labplus-sfence`、`test-labplus-wfi`、`test-labplus-mstatus-restrict`、`test-labplus-counters`、`test-labplus-mcountinhibit`、`test-labplus-csr-id`、`test-labplus-csr-envcfg`、`test-labplus-amo-d`、`test-labplus-clint`、`test-labplus-plic`、`test-labplus-uart`、`test-labplus-virtio`、`test-labplus-xv6smoke`、`test-labplus-xv6boot`、`test-labplus-xv6boot-check`、`test-labplus-xv6shell-check`、`xv6-prepare-images`、`test-labplus-vivado-precheck`、`test-labplus-board-device`、`test-labplus-board-soc-trace`、`test-labplus-preboard`、`vivado-nexys4-bitstream`、`vivado-nexys4-program` 和 `nexys4-uart-check`。其中 `test-labplus-preboard` 串行运行所有非 Vivado 的 Lab+ directed checks，作为上板前 smoke/regression 集合入口；`test-labplus-xv6boot` 检查 `XV6_KERNEL` raw binary，按需 stage `XV6_FS` 到 `build/xv6/fs.img` 并用 `--no-diff` 启动 emu；该目标现在使用增量 `emu` 构建而不是每次清空 `build`，重复跑 xv6 检查时可以复用已有 Verilator 产物；`test-labplus-xv6shell-check` 通过 UART 输入脚本执行 `echo xv6-shell-ok`；`xv6-prepare-images` 将已有 xv6 ELF/`fs.img` 转换并 stage 到默认 boot 路径；`vivado-nexys4-bitstream` 在安装 Vivado 的机器上调用 batch Tcl 重建 `.bit`；`vivado-nexys4-program` 调用 Hardware Manager batch Tcl 烧写当前 `.bit`；`nexys4-uart-check` 用于实体板串口输出验收。
 - `ready-to-run/lab+/`
   - 补充官方 Lab+ 测试二进制和汇编反汇编文件。
 
@@ -1427,15 +1428,13 @@ uart input script armed after trigger: init: starting sh
 ech
 o uart input script finished
 xv6-shell-ok
-now = 480s
-$ now = 540s
-xv6-shell-ok
-Core 0: EXCEEDING CYCLE/INSTR LIMIT at pc = 0x0
-instrCnt = 93012157, cycleCnt = 649999999, IPC = 0.143096
+xv6 boot marker observed early: 'xv6-shell-ok'; stopping emulator
 xv6 boot marker found: 'xv6-shell-ok'
 ```
 
 第一次实现时脚本在每个 `uart_in_valid` 周期连续灌入 18 字节，xv6 只收到 `xv6-shell-o`，原因是命令长度超过 16550 RX FIFO 16B 深度，瞬时输入与内核中断处理速度不匹配。加入可配置字节间隔后，仿真输入更接近真实串口节奏，shell 可以完整执行命令。这说明当前 no-RVC xv6 smoke 不仅能到 shell banner，还能进入用户态 shell、接收控制台输入并运行基础用户程序。
+
+随后对 `tools/check_xv6_boot.py` 增加 marker early-stop，并将 `test-labplus-xv6boot` 改为复用已有 `build/emu` 的增量构建。复测 `XV6_BOOT_EXPECT='xv6 kernel is booting'` 时，第二次运行输出 `Nothing to be done for 'emu'`，总耗时降到约 2.3 秒；复测 `test-labplus-xv6shell-check` 时，`xv6-shell-ok` 出现后立即停止 emu，不再额外等待到 650M cycle 上限。
 
 ### 7.16.2 Sstc/stimecmp 定向测试
 

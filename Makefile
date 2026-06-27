@@ -329,7 +329,8 @@ test-labplus-xv6boot:
 	  echo "Optional disk image: XV6_FS=/path/to/fs.img"; \
 	  exit 2; \
 	fi
-	$(MAKE) sim
+	mkdir -p build
+	$(MAKE) EMU_TRACE=1 emu -j12 NOOP_HOME=$(NOOP_HOME) NEMU_HOME=$(NEMU_HOME)
 	@mkdir -p build/xv6
 	@if [ -f "$(XV6_FS)" ]; then \
 	  cp "$(XV6_FS)" build/xv6/fs.img; \

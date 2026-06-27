@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -59,7 +61,27 @@ def parse_args() -> argparse.Namespace:
         default=REPO_ROOT / "build" / "xv6" / "boot.log",
         help="Path to write combined stdout/stderr.",
     )
+    parser.add_argument(
+        "--no-early-stop",
+        action="store_true",
+        help="Keep running until the emulator exits even after the expected marker appears.",
+    )
     return parser.parse_args()
+
+
+def stop_process_tree(proc: subprocess.Popen[str]) -> None:
+    """Stop make and its emulator child after the requested marker is observed."""
+    if proc.poll() is not None:
+        return
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+    proc.terminate()
 
 
 def main() -> int:
@@ -95,6 +117,10 @@ def main() -> int:
     tmp_fd, tmp_name = tempfile.mkstemp(prefix="xv6-boot-", suffix=".log")
     tmp_path = Path(tmp_name)
 
+    early_stop = not args.no_early_stop
+    marker_found = False
+    output_parts: list[str] = []
+
     print("running:", " ".join(str(part) for part in cmd))
     try:
         with open(tmp_fd, "w", encoding="utf-8", errors="replace") as log_file:
@@ -106,11 +132,24 @@ def main() -> int:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                start_new_session=(os.name == "posix"),
             )
             assert proc.stdout is not None
             for line in proc.stdout:
                 print(line, end="")
                 log_file.write(line)
+                output_parts.append(line)
+                if (
+                    early_stop
+                    and not marker_found
+                    and args.expect in normalize_output("".join(output_parts))
+                ):
+                    marker_found = True
+                    msg = f"xv6 boot marker observed early: {args.expect!r}; stopping emulator\n"
+                    print(msg, end="")
+                    log_file.write(msg)
+                    log_file.flush()
+                    stop_process_tree(proc)
             rc = proc.wait()
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,12 +158,14 @@ def main() -> int:
         if tmp_path.exists():
             tmp_path.unlink()
 
-    if rc != 0:
+    output = normalize_output(log_path.read_text(encoding="utf-8", errors="replace"))
+    marker_found = marker_found or (args.expect in output)
+
+    if rc != 0 and not marker_found:
         print(f"xv6 boot command failed with exit code {rc}; log: {log_path}", file=sys.stderr)
         return rc
 
-    output = normalize_output(log_path.read_text(encoding="utf-8", errors="replace"))
-    if args.expect not in output:
+    if not marker_found:
         print(f"xv6 boot marker not found: {args.expect!r}; log: {log_path}", file=sys.stderr)
         return 1
 
