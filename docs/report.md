@@ -1405,6 +1405,8 @@ xv6 boot marker found: 'init: starting sh'
 
 这里的 cycle limit 是预期结束方式：目标字符串已经出现，随后 xv6 继续推进到 shell 进程路径并等待后续交互，仿真继续空转直到达到 cycle budget。第一次复现时 `/init` 在 `sepc=0xb08` 处取到 0，最终定位到 virtio 模型只复制 512B data descriptor；修复为按 `desc1_len` 搬运多个 sector 后，调试镜像中 `init[0xb08]` 变为真实指令字节并成功进入 shell banner。随后又撤回 virtio disk 和 UART TX 的 polling workaround，调试阶段日志中连续出现 `devintr irq=1/10`，证明 PLIC source 1/10 和 S external interrupt 唤醒路径可以支撑 `fsinit` 与 `uartwrite`。恢复 allocator poison fill 后，220M cycle 只够跑到 `fsinit` 中段，420M cycle 可以到 `init: starting sh`；`tools/check_xv6_boot.py` 已经补充 ANSI/计时输出过滤，避免 `now = ...s` 插入 UART 字符之间导致 marker 误判。最后重新构建了一版不含 `[boot]` 调试打印的默认 `kernel.bin`，`test-labplus-xv6boot-check` 仍可通过。
 
+随后又额外构建了一个临时 `PHYSTOP=128MiB` 候选镜像，输出到 `/tmp/xv6-phystop128/` 而不覆盖默认 `ready-to-run/xv6/`。候选镜像可以正常打印 `xv6 kernel is booting`，说明已经进入 xv6 内核入口；但保留 allocator poison fill 时，早期 `kinit` 需要初始化的页数约为当前 16MiB smoke 镜像的 8 倍，探索性长跑十多分钟仍未到达临时加入的 `kinit done` 探针，因此本次不把 128MiB 镜像作为默认回归目标。这个结果更像是 RTL 仿真成本问题，而不是新的 CSR/MMU/PLIC/virtio 功能阻塞。
+
 ### 7.16.2 Sstc/stimecmp 定向测试
 
 运行：
